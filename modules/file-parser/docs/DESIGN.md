@@ -42,7 +42,8 @@ Maximum 50MB per document. Enforced at API layer via body size limits.
 Local file parsing (`parse-local`) validates paths before any filesystem access:
 (a) paths containing `..` components are rejected outright;
 (b) the requested path is canonicalized (resolving symlinks);
-(c) if `allowed_local_base_dir` is configured, the canonical path must be a descendant of that directory.
+(c) the canonical path must be a descendant of the mandatory `allowed_local_base_dir`.
+The module fails to start if `allowed_local_base_dir` is missing or unresolvable.
 Violations return HTTP 403 Forbidden. Rejected attempts are logged at `warn` level.
 <!-- fdd-id-content -->
 

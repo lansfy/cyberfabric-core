@@ -104,7 +104,7 @@ System SHALL convert documents to Markdown format, preserving headings, lists, f
 **ID**: [ ] `p1` `fdd-file-parser-fr-local-path-security-v1`
 
 <!-- fdd-id-content -->
-System SHALL reject local file paths containing `..` traversal components. When `allowed_local_base_dir` is configured, system SHALL canonicalize the requested path (resolving symlinks) and reject paths that do not fall under the base directory. Rejected requests SHALL return HTTP 403 and be logged at `warn` level.
+System SHALL reject local file paths containing `..` traversal components. System SHALL require a mandatory `allowed_local_base_dir` configuration; the module SHALL fail to start if this field is missing or the path cannot be resolved. System SHALL canonicalize the requested path (resolving symlinks) and reject paths that do not fall under the base directory. Rejected requests SHALL return HTTP 403 and be logged at `warn` level.
 
 **Actors**: `fdd-file-parser-actor-api-user`, `fdd-file-parser-actor-consumer`
 <!-- fdd-id-content -->

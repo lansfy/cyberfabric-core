@@ -268,6 +268,7 @@ modules:
   # File parser module configuration (no database needed)
   file-parser:
     config:
+      allowed_local_base_dir: /data/documents
       parser_extension_map:
       builtin:
         - "js"

@@ -9,7 +9,7 @@ use file_parser::domain::service::{FileParserService, ServiceConfig};
 use file_parser::infra::parsers::PlainTextParser;
 
 /// Build a minimal `FileParserService` with the given base-dir restriction.
-fn build_service(allowed_local_base_dir: Option<PathBuf>) -> FileParserService {
+fn build_service(allowed_local_base_dir: PathBuf) -> FileParserService {
     let parsers: Vec<Arc<dyn FileParserBackend>> = vec![Arc::new(PlainTextParser::new())];
     let config = ServiceConfig {
         max_file_size_bytes: 10 * 1024 * 1024,
@@ -26,12 +26,13 @@ fn create_temp_file(dir: &std::path::Path, name: &str, content: &str) -> PathBuf
 }
 
 // -----------------------------------------------------------------------
-// 1. `..` component rejection (no base-dir needed)
+// 1. `..` component rejection
 // -----------------------------------------------------------------------
 
 #[tokio::test]
 async fn rejects_dotdot_relative_path() {
-    let svc = build_service(None);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let svc = build_service(tmp.path().canonicalize().unwrap());
     let path = PathBuf::from("some/../../etc/passwd");
 
     let err = svc.parse_local(&path).await.unwrap_err();
@@ -43,7 +44,8 @@ async fn rejects_dotdot_relative_path() {
 
 #[tokio::test]
 async fn rejects_dotdot_at_start() {
-    let svc = build_service(None);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let svc = build_service(tmp.path().canonicalize().unwrap());
     let path = PathBuf::from("../secret.txt");
 
     let err = svc.parse_local(&path).await.unwrap_err();
@@ -52,7 +54,8 @@ async fn rejects_dotdot_at_start() {
 
 #[tokio::test]
 async fn rejects_dotdot_in_middle() {
-    let svc = build_service(None);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let svc = build_service(tmp.path().canonicalize().unwrap());
     let path = PathBuf::from("/allowed/dir/../../../etc/shadow");
 
     let err = svc.parse_local(&path).await.unwrap_err();
@@ -69,7 +72,7 @@ async fn allows_file_within_base_dir() {
     let base = tmp.path().canonicalize().unwrap();
     let file = create_temp_file(&base, "hello.txt", "Hello, world!");
 
-    let svc = build_service(Some(base));
+    let svc = build_service(base);
     let doc = svc.parse_local(&file).await.expect("should parse OK");
     assert!(!doc.blocks.is_empty(), "should produce blocks");
 }
@@ -82,7 +85,7 @@ async fn allows_file_in_subdirectory_of_base_dir() {
     std::fs::create_dir_all(&sub).unwrap();
     let file = create_temp_file(&sub, "nested.txt", "Nested content");
 
-    let svc = build_service(Some(base));
+    let svc = build_service(base);
     let doc = svc.parse_local(&file).await.expect("should parse OK");
     assert!(!doc.blocks.is_empty());
 }
@@ -95,7 +98,7 @@ async fn rejects_file_outside_base_dir() {
     let base = base_tmp.path().canonicalize().unwrap();
     let outside_file = create_temp_file(other_tmp.path(), "secret.txt", "Secret data");
 
-    let svc = build_service(Some(base));
+    let svc = build_service(base);
     let err = svc.parse_local(&outside_file).await.unwrap_err();
     assert!(
         matches!(err, DomainError::PathTraversalBlocked { .. }),
@@ -108,12 +111,10 @@ async fn rejects_absolute_path_outside_base_dir() {
     let base_tmp = tempfile::tempdir().expect("failed to create base dir");
     let base = base_tmp.path().canonicalize().unwrap();
 
-    // /etc/hostname exists on most Linux systems and has no extension,
-    // but /tmp is always present — create a real file outside the base.
     let other_tmp = tempfile::tempdir().expect("failed to create other dir");
     let outside = create_temp_file(other_tmp.path(), "data.log", "log line");
 
-    let svc = build_service(Some(base));
+    let svc = build_service(base);
     let err = svc.parse_local(&outside).await.unwrap_err();
     assert!(matches!(err, DomainError::PathTraversalBlocked { .. }));
 }
@@ -135,7 +136,7 @@ async fn rejects_symlink_escape_from_base_dir() {
     let symlink_path = base.join("escape.txt");
     std::os::unix::fs::symlink(&external_file, &symlink_path).expect("failed to create symlink");
 
-    let svc = build_service(Some(base));
+    let svc = build_service(base);
     let err = svc.parse_local(&symlink_path).await.unwrap_err();
     assert!(
         matches!(err, DomainError::PathTraversalBlocked { .. }),
@@ -144,27 +145,16 @@ async fn rejects_symlink_escape_from_base_dir() {
 }
 
 // -----------------------------------------------------------------------
-// 4. No base-dir configured — unrestricted (except `..` rejection)
-// -----------------------------------------------------------------------
-
-#[tokio::test]
-async fn allows_absolute_path_when_no_base_dir() {
-    let tmp = tempfile::tempdir().expect("failed to create temp dir");
-    let file = create_temp_file(tmp.path(), "test.txt", "No restriction");
-
-    let svc = build_service(None);
-    let doc = svc.parse_local(&file).await.expect("should parse OK");
-    assert!(!doc.blocks.is_empty());
-}
-
-// -----------------------------------------------------------------------
-// 5. Edge cases
+// 4. Edge cases
 // -----------------------------------------------------------------------
 
 #[tokio::test]
 async fn file_not_found_still_works() {
-    let svc = build_service(None);
-    let path = PathBuf::from("/nonexistent/path/to/file.txt");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let base = tmp.path().canonicalize().unwrap();
+    let svc = build_service(base.clone());
+    // Use a path inside the base dir that doesn't exist
+    let path = base.join("nonexistent.txt");
 
     let err = svc.parse_local(&path).await.unwrap_err();
     assert!(
@@ -175,7 +165,8 @@ async fn file_not_found_still_works() {
 
 #[tokio::test]
 async fn dotdot_error_message_contains_path() {
-    let svc = build_service(None);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let svc = build_service(tmp.path().canonicalize().unwrap());
     let path = PathBuf::from("/safe/../etc/passwd");
 
     let err = svc.parse_local(&path).await.unwrap_err();
@@ -198,7 +189,7 @@ async fn base_dir_error_message_hides_canonical_path() {
     let base = base_tmp.path().canonicalize().unwrap();
     let outside = create_temp_file(other_tmp.path(), "leak.txt", "data");
 
-    let svc = build_service(Some(base.clone()));
+    let svc = build_service(base.clone());
     let err = svc.parse_local(&outside).await.unwrap_err();
     match err {
         DomainError::PathTraversalBlocked { message } => {

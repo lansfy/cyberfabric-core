@@ -39,18 +39,9 @@ pub struct FileParserService {
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     pub max_file_size_bytes: usize,
-    /// Canonicalized base directory for local file access. When `Some`, only
-    /// paths that start with this prefix are allowed by `parse_local`.
-    pub allowed_local_base_dir: Option<PathBuf>,
-}
-
-impl Default for ServiceConfig {
-    fn default() -> Self {
-        Self {
-            max_file_size_bytes: 100 * 1024 * 1024, // 100 MB
-            allowed_local_base_dir: None,
-        }
-    }
+    /// Canonicalized base directory for local file access. Only paths that
+    /// start with this prefix are allowed by `parse_local`.
+    pub allowed_local_base_dir: PathBuf,
 }
 
 /// Information about available parsers
@@ -94,36 +85,38 @@ impl FileParserService {
     /// The requested path is validated before any file-system access:
     /// 1. `..` path components are rejected outright.
     /// 2. The path is canonicalized (resolving symlinks).
-    /// 3. If `allowed_local_base_dir` is configured, the canonical path must
-    ///    fall under that directory.
+    /// 3. The canonical path must fall under `allowed_local_base_dir`.
     #[instrument(skip(self), fields(path = %path.display()))]
     pub async fn parse_local(&self, path: &Path) -> Result<ParsedDocument, DomainError> {
         info!("Parsing file from local path");
 
         // --- Path traversal protection ---
+        // Order matters: validate before any filesystem probe so that
+        // unauthorised paths never leak existence information.
         Self::validate_local_path(path)?;
 
-        // Check if file exists
-        if !path.exists() {
-            return Err(DomainError::file_not_found(path.display().to_string()));
-        }
-
-        // Canonicalize to resolve symlinks before base-dir check
+        // Canonicalize to resolve symlinks. This also serves as the
+        // existence check — canonicalize fails with NotFound on missing paths.
         let canonical = path.canonicalize().map_err(|e| {
-            DomainError::io_error(format!(
-                "Cannot canonicalize path '{}': {e}",
-                path.display()
-            ))
+            if e.kind() == std::io::ErrorKind::NotFound {
+                DomainError::file_not_found(path.display().to_string())
+            } else {
+                DomainError::io_error(format!(
+                    "Cannot canonicalize path '{}': {e}",
+                    path.display()
+                ))
+            }
         })?;
 
-        // Enforce base directory (after symlink resolution)
-        if let Some(ref base) = self.config.allowed_local_base_dir
-            && !canonical.starts_with(base)
-        {
+        // Enforce base directory (after symlink resolution).
+        // This runs before any content is read, so an attacker probing
+        // paths outside the base dir gets a uniform 403 regardless of
+        // whether the path exists.
+        if !canonical.starts_with(&self.config.allowed_local_base_dir) {
             warn!(
                 requested = %path.display(),
                 canonical = %canonical.display(),
-                base_dir = %base.display(),
+                base_dir = %self.config.allowed_local_base_dir.display(),
                 "Path traversal blocked: canonical path outside allowed base directory"
             );
             return Err(DomainError::path_traversal_blocked(format!(
