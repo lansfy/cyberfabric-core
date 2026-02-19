@@ -144,6 +144,17 @@ impl ServerConfig {
     }
 }
 
+/// Console output format for the logging layer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConsoleFormat {
+    /// Human-readable text output (default).
+    #[default]
+    Text,
+    /// Structured JSON output (useful for container log collectors).
+    Json,
+}
+
 /// Logging configuration - maps subsystem names to their logging settings.
 /// Key "default" is the catch-all for logs that don't match explicit subsystems.
 pub type LoggingConfig = HashMap<String, Section>;
@@ -198,6 +209,9 @@ pub struct SectionFile {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Section {
+    pub console_level: Option<Level>,
+    #[serde(default)]
+    pub console_format: ConsoleFormat,
     #[serde(
         default = "optional_level_serde::default",
         with = "optional_level_serde"
@@ -239,6 +253,7 @@ pub fn default_logging_config() -> LoggingConfig {
                 file: "logs/cyberfabric.log".to_owned(),
                 file_level: Some(Level::DEBUG),
             }),
+            console_format: ConsoleFormat::default(),
             max_age_days: Some(7),
             max_backups: Some(3),
             max_size_mb: Some(100),
