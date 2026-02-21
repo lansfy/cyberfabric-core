@@ -1,0 +1,1377 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Mini Chat API",
+    "version": "1.0.0",
+    "description": "Multi-tenant AI chat module. Provides conversational AI with streaming responses, document and image upload, file search, per-user quota enforcement, and audit event emission. All endpoints require authentication and tenant license verification (ai_chat feature)."
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "servers": [],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "chats",
+      "description": "Chat lifecycle: create, list, get, delete."
+    },
+    {
+      "name": "messages",
+      "description": "Send messages and receive streamed AI responses (SSE)."
+    },
+    {
+      "name": "attachments",
+      "description": "Upload documents and images to a chat."
+    },
+    {
+      "name": "turns",
+      "description": "Turn status query and tail-only mutations (retry, edit, delete)."
+    },
+    {
+      "name": "reactions",
+      "description": "Binary like/dislike reactions on assistant messages."
+    }
+  ],
+  "paths": {
+    "/v1/chats": {
+      "post": {
+        "operationId": "createChat",
+        "tags": ["chats"],
+        "summary": "Create a new chat",
+        "description": "Creates a chat for the authenticated user. The optional `model` field selects a model from the deployment model catalog; if omitted, the catalog default (first entry) is used. The model is locked for the chat lifetime.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChatRequest"
+              },
+              "example": {
+                "title": "Q3 Financial Analysis",
+                "model": "gpt-5.2"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Chat created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Chat"
+                },
+                "example": {
+                  "id": "chat-456",
+                  "tenant_id": "tenant-xyz-789",
+                  "user_id": "user-abc-123",
+                  "model": "gpt-5.2",
+                  "title": "Q3 Financial Analysis",
+                  "is_temporary": false,
+                  "created_at": "2025-06-15T10:30:00Z",
+                  "updated_at": "2025-06-15T10:30:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (e.g. unknown model name).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listChats",
+        "tags": ["chats"],
+        "summary": "List chats for the current user",
+        "description": "Returns chats for the authenticated user ordered by most recent activity (updated_at DESC). Supports cursor-based pagination and OData `$select` field projection. This endpoint supports OData `$select` for sparse field projection. Field names are case-insensitive. Dot notation is supported for nested objects.",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor for fetching the next page.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of items to return.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "$select",
+            "in": "query",
+            "required": false,
+            "description": "OData field projection parameter. Comma-separated list of fields. Supports dot notation for nested fields. Case-insensitive.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of chat objects.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items", "page_info"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Chat"
+                      }
+                    },
+                    "page_info": {
+                      "type": "object",
+                      "required": ["has_next"],
+                      "properties": {
+                        "has_next": {
+                          "type": "boolean"
+                        },
+                        "next_cursor": {
+                          "type": ["string", "null"]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/chats/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        }
+      ],
+      "get": {
+        "operationId": "getChat",
+        "tags": ["chats"],
+        "summary": "Get chat with recent messages",
+        "description": "Returns chat metadata (including selected model) and the most recent messages.",
+        "responses": {
+          "200": {
+            "description": "Chat detail with recent messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteChat",
+        "tags": ["chats"],
+        "summary": "Delete a chat",
+        "description": "Soft-deletes the chat and marks attachments for asynchronous cleanup. External provider resources (files, chat vector stores) are removed by a background cleanup worker with idempotent retries.",
+        "responses": {
+          "204": {
+            "description": "Chat deleted. Cleanup of external resources is asynchronous."
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/v1/chats/{id}/messages:stream": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        }
+      ],
+      "post": {
+        "operationId": "sendMessage",
+        "tags": ["messages"],
+        "summary": "Send message and receive streamed AI response",
+        "description": "Sends a user message and opens an SSE stream for the assistant response. If `request_id` matches an active generation, returns 409 Conflict (JSON, no SSE). If `request_id` matches a completed generation, replays the response as SSE.\n\nThe optional `web_search` parameter enables web search for this turn (disabled by default, backward compatible).\n\n**SSE event ordering**: `ping* (delta | tool | citations)* (done | error)`\n\nExactly one terminal event (`done` or `error`) ends the stream.\n\n**SSE event types and payloads**:\n- `event: ping` — keepalive, payload: `{}`. Clients MUST ignore.\n- `event: delta` — incremental text. Payload: `SseDeltaEvent`.\n- `event: tool` — tool activity (file_search, web_search at P1). Payload: `SseToolEvent`.\n- `event: citations` — source references (file and web). Payload: `SseCitationsEvent`.\n- `event: done` — terminal success with usage and quota_decision. Payload: `SseDoneEvent`.\n- `event: error` — terminal failure. Payload: `SseErrorEvent`.\n\nSee component schemas for payload definitions.\n\n**Pre-stream errors**: If validation, authorization, or quota preflight fails before streaming, a JSON error response with the appropriate HTTP status is returned and no SSE stream is opened.\n\n**Cancellation**: If the client disconnects mid-stream, the server cancels the in-flight provider request and applies a bounded best-effort debit for quota.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              },
+              "example": {
+                "content": "What does the document say about Q3 revenue?",
+                "request_id": "req-001",
+                "attachment_ids": ["att-file-123"],
+                "web_search": { "enabled": false }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream opened. Events delivered as `text/event-stream`. See operation description for event types and payload schemas.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Server-Sent Events stream. Each event has `event:` type and `data:` JSON payload. See SseDeltaEvent, SseToolEvent, SseCitationsEvent, SseDoneEvent, SseErrorEvent schemas."
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-cache"
+                }
+              },
+              "Connection": {
+                "schema": {
+                  "type": "string",
+                  "const": "keep-alive"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. Possible codes: `too_many_images` (exceeds per-message image input limit), `web_search_disabled` (web search requested but kill switch is active).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "A generation is already running for this `(chat_id, request_id)`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Image bytes exceeded per-turn limit. Code: `image_bytes_exceeded`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Effective model does not support multimodal input. Validation occurs after downgrade decision and before provider call. Code: `unsupported_media`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Quota exceeded. Code: `quota_exceeded`. Returned when all tier quotas are exhausted, emergency flags force rejection, or all models are disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "LLM provider error. Code: `provider_error`. Returned as JSON response if failure occurs before SSE stream is opened. If failure occurs after streaming begins, delivered as terminal SSE `event: error` while HTTP status remains 200.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "LLM provider timeout. Code: `provider_timeout`. Returned as JSON response if failure occurs before SSE stream is opened. If failure occurs after streaming begins, delivered as terminal SSE `event: error` while HTTP status remains 200.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chats/{id}/attachments": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        }
+      ],
+      "post": {
+        "operationId": "uploadAttachment",
+        "tags": ["attachments"],
+        "summary": "Upload a document or image to a chat",
+        "description": "Uploads a file as an attachment. MIME type determines `kind`: `image/png`, `image/jpeg`, `image/webp` produce `image` attachments; all other supported types produce `document` attachments. Documents are indexed in the chat's dedicated vector store and optionally summarized. Images are stored via the provider Files API but NOT indexed in vector stores. Returns immediately with `status: pending`; transitions to `ready` or `failed` asynchronously.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The file to upload."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment created. Processing is asynchronous; poll chat detail or listen for status transitions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                },
+                "example": {
+                  "attachment_id": "att-file-123",
+                  "status": "pending",
+                  "kind": "document",
+                  "filename": "Q3_Report.pdf",
+                  "content_type": "application/pdf",
+                  "size_bytes": 245000,
+                  "provider_file_id": null,
+                  "doc_summary": null,
+                  "created_at": "2025-06-15T10:35:00Z"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "description": "File exceeds the configured upload size limit. Code: `file_too_large`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "File type not supported. Code: `unsupported_file_type`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Daily image upload quota exceeded. Code: `quota_exceeded`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider file upload failed. Code: `provider_error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chats/{id}/turns/{request_id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/RequestId"
+        }
+      ],
+      "get": {
+        "operationId": "getTurnStatus",
+        "tags": ["turns"],
+        "summary": "Get authoritative turn status",
+        "description": "Returns the server-side turn state for a given request_id. Used by the UI for disconnect recovery. Internal states map to API states: running->running, completed->done, failed->error, cancelled->cancelled.",
+        "responses": {
+          "200": {
+            "description": "Turn status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnStatus"
+                },
+                "example": {
+                  "chat_id": "chat-456",
+                  "request_id": "req-001",
+                  "state": "done",
+                  "updated_at": "2025-06-15T10:36:30Z"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "editTurn",
+        "tags": ["turns"],
+        "summary": "Edit the last user turn and regenerate response",
+        "description": "Replaces the content of the last user message and generates a new assistant response via SSE. The previous turn is soft-deleted with `replaced_by_request_id` set. Original `attachment_ids` are preserved. Only the most recent non-deleted turn in a terminal state may be edited.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditTurnRequest"
+              },
+              "example": {
+                "content": "What about Q3 profit margins?"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream with new assistant response. Same event contract as sendMessage.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Server-Sent Events stream. See sendMessage operation for event types."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Turn not in terminal state. Code: `invalid_turn_state`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Target is not the most recent turn. Code: `not_latest_turn`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Quota exceeded for regeneration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTurn",
+        "tags": ["turns"],
+        "summary": "Delete the last turn",
+        "description": "Soft-deletes the most recent turn (user message + assistant response). Only the latest non-deleted turn in a terminal state may be deleted. No replacement turn is created.",
+        "responses": {
+          "200": {
+            "description": "Turn deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnDeleteResponse"
+                },
+                "example": {
+                  "chat_id": "chat-456",
+                  "request_id": "req-001",
+                  "deleted": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Turn not in terminal state. Code: `invalid_turn_state`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Target is not the most recent turn. Code: `not_latest_turn`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chats/{id}/turns/{request_id}:retry": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/RequestId"
+        }
+      ],
+      "post": {
+        "operationId": "retryTurn",
+        "tags": ["turns"],
+        "summary": "Retry the last turn",
+        "description": "Soft-deletes the previous turn and re-submits the original user message (including any attachment_ids) for a new assistant response via SSE. Only the most recent non-deleted turn in a terminal state may be retried.",
+        "responses": {
+          "200": {
+            "description": "SSE stream with new assistant response. Same event contract as sendMessage.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Server-Sent Events stream. See sendMessage operation for event types."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Turn not in terminal state. Code: `invalid_turn_state`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "Target is not the most recent turn. Code: `not_latest_turn`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Quota exceeded for regeneration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chats/{id}/messages/{msg_id}/reaction": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/MessageId"
+        }
+      ],
+      "put": {
+        "operationId": "setReaction",
+        "tags": ["reactions"],
+        "summary": "Set like/dislike on an assistant message",
+        "description": "Upserts a binary reaction on an assistant message. Only assistant messages may receive reactions. Idempotent: replaces any existing reaction for this user on this message.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetReactionRequest"
+              },
+              "example": {
+                "reaction": "like"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reaction set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReactionResponse"
+                },
+                "example": {
+                  "message_id": "msg-789",
+                  "reaction": "like",
+                  "created_at": "2025-06-15T10:37:00Z"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Target is not an assistant message. Code: `invalid_reaction_target`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Chat or message not found. Code: `chat_not_found` or `message_not_found`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeReaction",
+        "tags": ["reactions"],
+        "summary": "Remove reaction from an assistant message",
+        "description": "Removes the current user's reaction from an assistant message. Idempotent: returns 200 even if no reaction exists.",
+        "responses": {
+          "200": {
+            "description": "Reaction removed (or was already absent).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReactionDeleteResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Chat or message not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Platform AuthN JWT or opaque token. Extracts user_id and tenant_id into the request security context."
+      }
+    },
+    "parameters": {
+      "ChatId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Chat UUID.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "RequestId": {
+        "name": "request_id",
+        "in": "path",
+        "required": true,
+        "description": "Client-generated idempotency key UUID identifying a turn.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "MessageId": {
+        "name": "msg_id",
+        "in": "path",
+        "required": true,
+        "description": "Message UUID.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "responses": {
+      "Forbidden": {
+        "description": "Tenant lacks `ai_chat` license (code: `feature_not_licensed`) or subject lacks permission (code: `insufficient_permissions`).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found or not accessible under current authorization constraints. Code: `chat_not_found` or `message_not_found`. AuthZ fail-closed: denied requests with a concrete resource ID return 404.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["code", "message"],
+        "description": "Standard error envelope for JSON error responses and SSE terminal error events.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Canonical error code.",
+            "enum": [
+              "feature_not_licensed",
+              "insufficient_permissions",
+              "chat_not_found",
+              "message_not_found",
+              "quota_exceeded",
+              "rate_limited",
+              "web_search_disabled",
+              "file_too_large",
+              "unsupported_file_type",
+              "too_many_images",
+              "image_bytes_exceeded",
+              "unsupported_media",
+              "provider_error",
+              "provider_timeout",
+              "not_latest_turn",
+              "invalid_turn_state",
+              "invalid_reaction_target"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error description."
+          }
+        }
+      },
+      "Chat": {
+        "type": "object",
+        "required": ["id", "tenant_id", "user_id", "model", "is_temporary", "created_at", "updated_at"],
+        "description": "Chat metadata. Returned by create, list, and as part of chat detail.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model identifier from the deployment model catalog. Locked at creation for the chat lifetime."
+          },
+          "title": {
+            "type": ["string", "null"],
+            "maxLength": 255
+          },
+          "is_temporary": {
+            "type": "boolean",
+            "default": false,
+            "description": "P2 feature. Schema column reserved; always false at P1."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ChatDetail": {
+        "description": "Chat metadata with recent messages. Returned by getChat.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Chat"
+          },
+          {
+            "type": "object",
+            "required": ["messages"],
+            "properties": {
+              "messages": {
+                "type": "array",
+                "description": "Most recent messages in chronological order. The server enforces an internal configurable limit. This endpoint does not support pagination at P1.",
+                "items": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Message": {
+        "type": "object",
+        "required": ["id", "chat_id", "role", "content", "created_at"],
+        "description": "A single message in a chat (user, assistant, or system).",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "chat_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "request_id": {
+            "type": ["string", "null"],
+            "format": "uuid",
+            "description": "Client-generated idempotency key. Null for system messages."
+          },
+          "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system"]
+          },
+          "content": {
+            "type": "string"
+          },
+          "model": {
+            "type": ["string", "null"],
+            "description": "Effective model used. Present on assistant messages; null on user/system messages."
+          },
+          "input_tokens": {
+            "type": ["integer", "null"],
+            "description": "Actual input tokens. Present on assistant messages."
+          },
+          "output_tokens": {
+            "type": ["integer", "null"],
+            "description": "Actual output tokens. Present on assistant messages."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "required": ["attachment_id", "status", "kind", "filename", "content_type", "size_bytes", "created_at"],
+        "description": "File attachment (document or image) on a chat.",
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "ready", "failed"],
+            "description": "Processing status. Transitions: pending -> ready or pending -> failed."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["document", "image"],
+            "description": "Derived from MIME type. image/png, image/jpeg, image/webp -> image; all other supported types -> document."
+          },
+          "filename": {
+            "type": "string",
+            "maxLength": 255
+          },
+          "content_type": {
+            "type": "string",
+            "description": "MIME type of the uploaded file."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "provider_file_id": {
+            "type": ["string", "null"],
+            "description": "Opaque provider file identifier (display-only). Clients MUST NOT send this back to any API."
+          },
+          "doc_summary": {
+            "type": ["string", "null"],
+            "description": "LLM-generated document summary. Present for documents after background processing completes; always null for images."
+          },
+          "summary_model": {
+            "type": ["string", "null"],
+            "description": "Model used for summary generation."
+          },
+          "summary_updated_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Timestamp of summary generation."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TurnStatus": {
+        "type": "object",
+        "required": ["chat_id", "request_id", "state", "updated_at"],
+        "description": "Authoritative server-side turn state. Internal-to-API state mapping: running->running, completed->done, failed->error, cancelled->cancelled.",
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["running", "done", "error", "cancelled"]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TurnDeleteResponse": {
+        "type": "object",
+        "required": ["chat_id", "request_id", "deleted"],
+        "properties": {
+          "chat_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deleted": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "ReactionResponse": {
+        "type": "object",
+        "required": ["message_id", "reaction", "created_at"],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reaction": {
+            "type": "string",
+            "enum": ["like", "dislike"]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReactionDeleteResponse": {
+        "type": "object",
+        "required": ["message_id", "deleted"],
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deleted": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "CreateChatRequest": {
+        "type": "object",
+        "description": "Request body for creating a new chat.",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Optional chat title."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model from the deployment model catalog. If omitted, the catalog default (first entry) is used."
+          }
+        }
+      },
+      "SendMessageRequest": {
+        "type": "object",
+        "required": ["content"],
+        "description": "Request body for sending a message. Opens an SSE stream on success.",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "User message text."
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Client-generated idempotency key. If a running turn exists for this (chat_id, request_id), the server returns 409. If a completed turn exists, the server replays the response."
+          },
+          "attachment_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Attachment IDs (images or documents) to include in this turn. Attachments must belong to this chat, must have status=ready, and are validated after effective model capability resolution."
+          },
+          "web_search": {
+            "$ref": "#/components/schemas/WebSearchOption"
+          }
+        }
+      },
+      "EditTurnRequest": {
+        "type": "object",
+        "required": ["content"],
+        "description": "Request body for editing the last user turn. Original attachment_ids are preserved automatically.",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Replacement user message text."
+          }
+        }
+      },
+      "SetReactionRequest": {
+        "type": "object",
+        "required": ["reaction"],
+        "properties": {
+          "reaction": {
+            "type": "string",
+            "enum": ["like", "dislike"]
+          }
+        }
+      },
+      "SseDeltaEvent": {
+        "type": "object",
+        "required": ["type", "content"],
+        "description": "SSE `event: delta` payload. Streams incremental assistant text output.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Content type. P1: always \"text\". Reserved for future: \"markdown\", \"structured\".",
+            "enum": ["text"]
+          },
+          "content": {
+            "type": "string",
+            "description": "Incremental text fragment."
+          }
+        }
+      },
+      "SseToolEvent": {
+        "type": "object",
+        "required": ["phase", "name"],
+        "description": "SSE `event: tool` payload. Reports tool call activity (P1: file_search, web_search).",
+        "properties": {
+          "phase": {
+            "type": "string",
+            "enum": ["start", "progress", "done"]
+          },
+          "name": {
+            "type": "string",
+            "description": "Tool name. P1: \"file_search\", \"web_search\"."
+          },
+          "details": {
+            "type": "object",
+            "description": "Tool-specific non-sensitive details.",
+            "properties": {
+              "files_searched": {
+                "type": "integer",
+                "description": "Number of files searched. Present in phase=done."
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "SseCitationsEvent": {
+        "type": "object",
+        "required": ["items"],
+        "description": "SSE `event: citations` payload. Delivers source references used in the answer. Emitted once near stream completion before the terminal event.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CitationItem"
+            }
+          }
+        }
+      },
+      "CitationItem": {
+        "type": "object",
+        "required": ["source", "title", "snippet"],
+        "description": "A single citation reference.",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["file", "web"],
+            "description": "Citation source type. P1: \"file\" and \"web\" (when web search is enabled)."
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL for web sources. Present when source=\"web\"."
+          },
+          "attachment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Internal attachment ID. Preferred reference for clients."
+          },
+          "file_id": {
+            "type": "string",
+            "description": "Opaque provider file ID. Display-only; clients MUST NOT send this back to any API."
+          },
+          "span": {
+            "type": "object",
+            "description": "Reserved for mapping citations to character positions in final assistant text.",
+            "properties": {
+              "start": {
+                "type": "integer"
+              },
+              "end": {
+                "type": "integer"
+              }
+            }
+          },
+          "snippet": {
+            "type": "string",
+            "description": "Relevant excerpt from the source."
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Relevance score."
+          }
+        }
+      },
+      "SseDoneEvent": {
+        "type": "object",
+        "required": ["message_id", "usage", "effective_model", "selected_model", "provider", "quota_decision"],
+        "description": "SSE `event: done` payload. Terminal event finalizing the stream with usage, model selection, and correlation metadata.",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Persisted assistant message ID."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/SseUsage"
+          },
+          "effective_model": {
+            "type": "string",
+            "description": "Model actually used for this turn after quota and policy evaluation. Always present."
+          },
+          "selected_model": {
+            "type": "string",
+            "description": "Model chosen at chat creation (chats.model). Always present. Equals effective_model when no downgrade occurred."
+          },
+          "quota_decision": {
+            "type": "string",
+            "enum": ["allow", "downgrade"],
+            "description": "Indicates whether the selected model was used as-is (allow) or a quota-driven downgrade occurred (downgrade). Always present."
+          },
+          "downgrade_from": {
+            "type": "string",
+            "description": "Always equals selected_model when present. The model from which the quota-driven downgrade occurred. Present only when quota_decision=\"downgrade\"."
+          },
+          "downgrade_reason": {
+            "type": "string",
+            "enum": ["premium_quota_exhausted", "balanced_quota_exhausted", "kill_switch"],
+            "description": "Why downgrade occurred. Present only when quota_decision=\"downgrade\"."
+          },
+          "provider": {
+            "$ref": "#/components/schemas/SseProvider"
+          }
+        }
+      },
+      "SseUsage": {
+        "type": "object",
+        "required": ["input_tokens", "output_tokens", "model"],
+        "description": "Token usage reported in the terminal done event.",
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "description": "Actual input tokens (includes image token costs if applicable)."
+          },
+          "output_tokens": {
+            "type": "integer",
+            "description": "Actual output tokens."
+          },
+          "model": {
+            "type": "string",
+            "description": "Effective model used for generation. May differ from the chat's locked model if a quota-driven downgrade occurred; see quota_decision on the done event."
+          }
+        }
+      },
+      "SseProvider": {
+        "type": "object",
+        "required": ["name", "response_id"],
+        "description": "Provider correlation metadata.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["openai", "azure_openai"]
+          },
+          "response_id": {
+            "type": "string",
+            "description": "Provider-assigned response correlation ID."
+          }
+        }
+      },
+      "SseErrorEvent": {
+        "type": "object",
+        "required": ["code", "message"],
+        "description": "SSE `event: error` payload. Terminal event indicating a failure after the stream has started. Uses the same schema as ErrorResponse.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Canonical error code (see ErrorResponse.code enum)."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error description."
+          }
+        }
+      },
+      "WebSearchOption": {
+        "type": "object",
+        "description": "Controls web search for this turn. Defaults to disabled when omitted (backward compatible).",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, the web_search tool is included in the provider request. The provider decides whether to invoke the tool. If the global disable_web_search kill switch is active, the request is rejected with web_search_disabled (400)."
+          }
+        }
+      },
+      "QuotaDecision": {
+        "type": "string",
+        "enum": ["allow", "downgrade"],
+        "description": "Deprecated as standalone schema — fields are now inlined on SseDoneEvent. Retained for backward reference only."
+      }
+    }
+  }
+}
