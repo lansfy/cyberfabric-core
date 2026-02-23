@@ -217,7 +217,7 @@ The UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until the attachme
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-fr-image-upload`
 
-The system MUST allow users to upload image files (PNG, JPEG/JPG, WebP) to a chat as image attachments. Image attachments are stored via the provider Files API and referenced in Responses API calls as multimodal input. Image attachments are NOT indexed in vector stores and do NOT participate in file_search tool calls. The system MUST return an attachment identifier and processing status (`pending`). The UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until the status transitions to `ready` or `failed`.
+The system MUST allow users to upload image files (PNG, JPEG/JPG, WebP) to a chat as image attachments. Image attachments are stored via the provider Files API and referenced in Responses API calls as multimodal input. Image attachments are NOT indexed in vector stores and do NOT participate in file_search tool calls. The system MUST return an attachment identifier and processing status (`pending`). The UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until the status transitions to `ready` or `failed`. For image attachments, the server MAY return `img_thumbnail` (a server-generated preview thumbnail sized to configured WxH); null otherwise. `img_thumbnail` is server-generated only (never provided by the client); maximum decoded size (raw bytes) is 128 KiB by default (configurable via `thumbnail_max_bytes`); stored internally in Mini Chat database only (never uploaded to provider); contains no provider identifiers. `doc_summary` remains always null for images.
 
 **Image upload rules**:
 
