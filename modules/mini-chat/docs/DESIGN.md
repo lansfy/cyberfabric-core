@@ -2523,7 +2523,7 @@ Every turn MUST eventually settle into exactly one persisted finalization outcom
 
 | Outcome | Internal state | SSE terminal event | Description |
 |---------|---------------|-------------------|-------------|
-| `completed` | `completed` | `done` | Normal completion. Provider returned a full response. |
+| `completed` | `completed` | `done` | Normal completion. Provider returned a full response and the full assistant message content is durably persisted (see content durability invariant below). |
 | `failed` | `failed` | `error` | Terminal error (pre-provider or post-provider-start). |
 | `cancelled` | `cancelled` | _(none; stream already disconnected)_ | Server-side cancellation triggered by client disconnect or internal abort. |
 
@@ -2557,6 +2557,16 @@ The finalizer MUST check `rows_affected` from this update:
 - **`rows_affected = 0`**: another finalizer already transitioned the turn. This finalizer MUST treat the turn as already finalized, MUST NOT debit quota, and MUST NOT emit an outbox event. It MUST be a silent no-op.
 
 No finalization path is exempt from this guard. The orphan watchdog uses the identical CAS pattern (`WHERE state = 'running'`) and cannot "finalize late" if the stream already completed or was already finalized by another path.
+
+#### Content durability invariant (completed ⇒ replayable)
+
+A turn MUST NOT transition to `completed` unless the full assistant message content has been durably persisted in the database (i.e. the `messages` row with `role = 'assistant'` and the complete response text exists and is committed). This is the invariant that guarantees idempotent replay: a `completed` turn always has stored content to serve.
+
+- If the provider stream ends with a terminal `done` event but the assistant message persistence fails (e.g. DB write error), the turn MUST be finalized as `failed` — not `completed` — and settlement MUST follow the `failed_post_provider_start` rules (section 5.3, usage accounting rule 2).
+- If the stream ends without a terminal `done`/`error` event and no durable assistant content exists, the turn follows the existing aborted-stream reconciliation path (section 5.4) and MUST NOT be marked `completed`.
+- Idempotent replay for `(chat_id, request_id)` (section 3.7 / Idempotency Rules) returns stored assistant content only for `completed` turns. For `failed`, `cancelled`, or `running` turns, the existing behavior applies (409 Conflict or Turn Status API guidance).
+
+**Consequence**: it is impossible for a turn with `state = completed` to have empty or missing assistant message text. Any code path that would produce a "completed with empty text" outcome is a violation of this invariant.
 
 #### Usage accounting rules per outcome
 

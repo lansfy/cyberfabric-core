@@ -521,6 +521,7 @@ Mini Chat MUST provide an explicit operational contract to support on-call, SRE,
 #### Required support signals (P1)
 
 - Every chat turn MUST have a stable `request_id` (client idempotency key) and a persisted internal turn state (`running|completed|failed|cancelled`) that is exposed via the Turn Status API as (`running|done|error|cancelled`).
+- A turn in `completed` state MUST have its full assistant message content durably persisted in the database, guaranteeing that idempotent replay for `(chat_id, request_id)` always returns the stored result; if persistence fails, the turn MUST be finalized as `failed`, never `completed`.
 - Every completed provider request MUST be correlated via `provider_response_id` and MUST be persisted and searchable by operators.
 - Support tooling MUST be able to determine turn state using server-side state (not inferred from client retry behavior).
 

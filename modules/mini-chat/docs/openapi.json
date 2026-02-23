@@ -1049,7 +1049,7 @@
       "TurnStatus": {
         "type": "object",
         "required": ["chat_id", "request_id", "state", "updated_at"],
-        "description": "Authoritative server-side turn state. Internal-to-API state mapping: running->running, completed->done, failed->error, cancelled->cancelled. All terminal states (done, error, cancelled) indicate that quota settlement has been finalized.",
+        "description": "Authoritative server-side turn state. Internal-to-API state mapping: running->running, completed->done, failed->error, cancelled->cancelled. All terminal states (done, error, cancelled) indicate that quota settlement has been finalized. A state of 'done' guarantees that the full assistant message content is durably persisted and available for idempotent replay.",
         "properties": {
           "chat_id": {
             "type": "string",
@@ -1146,7 +1146,7 @@
           "request_id": {
             "type": "string",
             "format": "uuid",
-            "description": "Client-generated idempotency key. If a running turn exists for this (chat_id, request_id), the server returns 409. If a completed turn exists, the server replays the response."
+            "description": "Client-generated idempotency key. If a running turn exists for this (chat_id, request_id), the server returns 409. If a completed turn exists, the server replays the durably stored response."
           },
           "attachment_ids": {
             "type": "array",
