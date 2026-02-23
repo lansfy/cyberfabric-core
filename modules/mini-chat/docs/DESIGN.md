@@ -453,6 +453,15 @@ Request body:
 
 If `request_id` is omitted, the server treats the request as non-idempotent (no replay semantics).
 
+**Replay is side-effect-free invariant**: when a completed turn is replayed for the same `(chat_id, request_id)`, the server:
+1. Fetches the stored assistant message content from the database.
+2. Streams it back to the client as SSE without issuing a new provider request.
+3. MUST NOT take a new quota reserve.
+4. MUST NOT update `quota_usage` or debit tokens.
+5. MUST NOT insert a new `usage_outbox` row.
+6. MUST NOT emit audit or billing events.
+Replay is a pure read-and-relay operation — idempotent and side-effect-free with respect to settlement. Only the CAS-winning finalizer (during the original execution) writes settlement and outbox; replays and CAS-losers never do.
+
 The UI MUST generate a new `request_id` per user send action. The UI MUST NOT auto-retry with the same `request_id` unless it intends to resume/retrieve the same generation.
 
 Active generation detection and completed replay are based on a durable `chat_turns` record (see section 3.7). `messages.request_id` uniqueness alone is not sufficient to represent `running` state.
