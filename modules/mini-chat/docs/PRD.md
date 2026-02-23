@@ -245,7 +245,7 @@ The system MUST support web search as an LLM tool, explicitly enabled per reques
 
 **Kill switch**: A global `disable_web_search` flag MUST allow operators to disable web search at runtime. When the kill switch is active and a request includes `web_search.enabled=true`, the system MUST reject with HTTP 400 and error code `web_search_disabled` before opening an SSE stream. The system MUST NOT silently ignore the parameter.
 
-**System prompt guard**: When web search is enabled for a turn, the system prompt MUST instruct the model: *"Use web_search only if the answer cannot be obtained from the provided context or your training data. Never use it for general knowledge questions. At most one web_search call per request."* This soft constraint reduces unnecessary calls; the per-message hard limit (default: 2) enforced by `quota_service` is the backstop.
+**System prompt guard**: When web search is enabled for a turn, the system prompt MUST instruct the model: *"Use web_search only if the answer cannot be obtained from the provided context or your training data. Never use it for general knowledge questions. At most one web_search call per request."* **Two enforcement layers**: (1) system prompt soft guidance — at most 1 call; (2) `quota_service` hard limit — configurable, default 2 calls per message. The soft constraint reduces unnecessary calls; the hard limit is the backstop. Tests MUST NOT assume exactly 1 call per turn — up to 2 calls are valid under the hard limit.
 
 **Citations**: When web search results contribute to the assistant response, the system MUST include citations with `source: "web"`, `url`, `title`, and `snippet` in the existing SSE `citations` event.
 
@@ -764,7 +764,9 @@ Support and UX recovery flows MUST be able to query authoritative turn state bac
 | `provider_error` | 502 | LLM provider returned an error |
 | `provider_timeout` | 504 | LLM provider request timed out |
 
-Provider identifiers (`provider_file_id`, `provider_response_id`, `vector_store_id`, and any other provider-issued ID) are internal-only and MUST NOT be exposed in any API response, SSE event payload, or error message. All client-visible identifiers are internal UUIDs only (`chat_id`, `turn_id`, `request_id`, `attachment_id`, `message_id`).
+Provider identifiers (`provider_file_id`, `provider_response_id`, `vector_store_id`, and any other provider-issued ID) are internal-only and MUST NOT be exposed in any API response, SSE event payload, or error message. Error `message` fields MUST be sanitized to remove any provider-issued identifiers before being returned to clients. All client-visible identifiers are internal UUIDs only (`chat_id`, `turn_id`, `request_id`, `attachment_id`, `message_id`).
+
+`tenant_id` and `user_id` are NOT returned in API response bodies. User and tenant identity is derived exclusively from the authentication context (Platform AuthN JWT). These fields are stored internally but are not part of the public Chat API contract.
 
 ## 8. Use Cases
 
