@@ -312,7 +312,7 @@
             }
           },
           "429": {
-            "description": "Token quota exceeded. Code: `quota_exceeded`, `quota_scope`: `tokens`. Returned when all tier quotas are exhausted, emergency flags force rejection, or all models are disabled.",
+            "description": "Quota exceeded. Code: `quota_exceeded`. Returned with `quota_scope`: `tokens` (all tier quotas exhausted, emergency flags, or all models disabled) or `web_search` (per-user daily web search call quota exhausted).",
             "content": {
               "application/json": {
                 "schema": {
@@ -873,7 +873,7 @@
       "QuotaExceededError": {
         "type": "object",
         "required": ["code", "message", "quota_scope"],
-        "description": "Error response for quota exhaustion. The quota_scope field is REQUIRED and distinguishes token quota exhaustion from upload quota exhaustion.",
+        "description": "Error response for quota exhaustion. The quota_scope field is REQUIRED and distinguishes token quota exhaustion, upload quota exhaustion, and web search quota exhaustion.",
         "properties": {
           "code": {
             "type": "string",
@@ -885,8 +885,8 @@
           },
           "quota_scope": {
             "type": "string",
-            "enum": ["tokens", "uploads"],
-            "description": "Distinguishes token quota exhaustion (tokens) from upload quota exhaustion (uploads). Clients MUST use this field, not message parsing, to determine quota scope."
+            "enum": ["tokens", "uploads", "web_search"],
+            "description": "Distinguishes token quota exhaustion (tokens), upload quota exhaustion (uploads), and web search quota exhaustion (web_search). Clients MUST use this field, not message parsing, to determine quota scope."
           }
         }
       },

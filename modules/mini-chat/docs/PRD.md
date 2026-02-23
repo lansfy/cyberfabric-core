@@ -241,7 +241,7 @@ The system MUST support answering questions about uploaded documents by retrievi
 
 The system MUST support web search as an LLM tool, explicitly enabled per request via an API parameter (`web_search.enabled`). When enabled, the backend includes the `web_search` tool in the provider request (Azure Foundry API tooling). The provider decides whether to invoke the tool based on the query; explicit enablement means "tool is available and allowed", not "force a call every time". Web search MUST be disabled by default (safe default for backward compatibility).
 
-**Rate limits**: The system MUST enforce configurable per-message web search call limits (default: 2 calls per message) and per-user daily web search quota (default: 75 calls per day), tracked in `quota_usage.web_search_calls`.
+**Rate limits**: The system MUST enforce configurable per-message web search call limits (default: 2 calls per message) and per-user daily web search quota (default: 75 calls per day), tracked in `quota_usage.web_search_calls`. When the daily web search quota is exhausted, the system MUST reject with `quota_exceeded` and `quota_scope = "web_search"` at preflight (before any provider call). This is part of cost control / quotas and MUST NOT be reported as `quota_scope = "tokens"`.
 
 **Kill switch**: A global `disable_web_search` flag MUST allow operators to disable web search at runtime. When the kill switch is active and a request includes `web_search.enabled=true`, the system MUST reject with HTTP 400 and error code `web_search_disabled` before opening an SSE stream. The system MUST NOT silently ignore the parameter.
 
@@ -753,7 +753,7 @@ Support and UX recovery flows MUST be able to query authoritative turn state bac
 | `feature_not_licensed` | 403 | Tenant lacks `ai_chat` feature |
 | `insufficient_permissions` | 403 | Subject lacks permission for the requested action (AuthZ Resolver denied) |
 | `chat_not_found` | 404 | Chat does not exist or not accessible under current authorization constraints |
-| `quota_exceeded` | 429 | User exceeded token rate limits across all tiers (premium, standard) in at least one period, or emergency flags force rejection, or all models are disabled |
+| `quota_exceeded` | 429 | Quota exhaustion. Always accompanied by `quota_scope`: `"tokens"` (token rate limits across all tiers exhausted, emergency flags, or all models disabled), `"uploads"` (daily upload quota exceeded), or `"web_search"` (per-user daily web search call quota exhausted) |
 | `rate_limited` | 429 | Too many requests in time window |
 | `file_too_large` | 413 | Uploaded file exceeds size limit |
 | `unsupported_file_type` | 415 | File type not supported for upload |
