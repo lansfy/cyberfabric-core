@@ -85,7 +85,9 @@ This PRD uses **P1/P2** to describe phased scope. The `p1`/`p2` tags on requirem
 
 ### 4.1 In Scope
 
-- Chat CRUD (create, list, get, delete) API
+- Chat CRUD (create, list, get, delete) API; chat detail returns metadata + message_count (no embedded messages)
+- Paginated message history via cursor-based pagination with OData v4 query support
+- Attachment status polling endpoint
 - Real-time streamed AI responses (SSE)
 - Persistent conversation history
 - Document upload and document-aware question answering via file search
@@ -145,7 +147,7 @@ Group chats and chat sharing (projects) are deferred to P2+ and are out of scope
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-fr-chat-crud`
 
-The system MUST allow authenticated users to create, list, retrieve, and delete chats. Each chat belongs to exactly one user within one tenant. At creation, the user MAY specify a model from the model catalog; if omitted, the default is resolved via the `is_default` premium model algorithm (see `cpt-cf-mini-chat-fr-model-selection`). The selected model is locked for the chat lifetime (see `cpt-cf-mini-chat-constraint-model-locked-per-chat`). Chat content (messages, attachments, summaries, citations) MUST be accessible only to the owning user within their tenant. Listing returns chats for the current user ordered by most recent activity. Retrieval returns chat metadata (including selected model) and the most recent messages. Deletion soft-deletes the chat and triggers cleanup of associated external resources.
+The system MUST allow authenticated users to create, list, retrieve, and delete chats. Each chat belongs to exactly one user within one tenant. At creation, the user MAY specify a model from the model catalog; if omitted, the default is resolved via the `is_default` premium model algorithm (see `cpt-cf-mini-chat-fr-model-selection`). The selected model is locked for the chat lifetime (see `cpt-cf-mini-chat-constraint-model-locked-per-chat`). Chat content (messages, attachments, summaries, citations) MUST be accessible only to the owning user within their tenant. Listing returns chats for the current user ordered by most recent activity. Retrieval returns chat metadata (including selected model) and `message_count`; messages are NOT embedded in the chat detail response — the UI MUST call `GET /v1/chats/{id}/messages` to load conversation history with cursor pagination. Deletion soft-deletes the chat and triggers cleanup of associated external resources.
 
 **Rationale**: Users need to manage their conversations - create new ones, resume existing ones, and remove ones they no longer need.
 **Actors**: `cpt-cf-mini-chat-actor-chat-user`
@@ -169,7 +171,7 @@ The system MUST deliver AI responses as a real-time SSE stream. The user sends a
 
 **Error model (Option A)**: If request validation, authorization, or quota preflight fails before any streaming begins, the system MUST return a normal JSON error response with the appropriate HTTP status and MUST NOT open an SSE stream. If a failure occurs after streaming has started, the system MUST terminate the stream with a terminal `event: error`.
 
-The request body MAY include a client-generated `request_id` used as an idempotency key, MAY include `attachment_ids` for image-bearing turns, and MAY include `web_search` to explicitly enable web search for the turn (see `cpt-cf-mini-chat-fr-web-search`). P1 enforces **at most one running turn per chat**: if any turn in the chat is currently `running`, the system MUST reject the new request with `409 Conflict`, regardless of the `request_id` value. Additionally, if a `chat_turns` record with `state=running` exists for the same `(chat_id, request_id)`, the system MUST reject with `409 Conflict`. If a completed generation exists for the same `(chat_id, request_id)`, the system MUST replay the completed assistant response rather than starting a new provider request. Replay MUST be side-effect-free: no new quota reserve, no quota settlement, no billing/outbox event emission.
+The request body MAY include a client-generated `request_id` used as an idempotency key (if omitted, the server MUST generate a UUID v4); MAY include `attachment_ids` for image-bearing turns; and MAY include `web_search` to explicitly enable web search for the turn (see `cpt-cf-mini-chat-fr-web-search`). In every Message response DTO, `request_id` is always present and non-null (a required UUID). Within a normal turn, the user message and assistant response share the same `request_id` (the turn correlation key). System/background messages (e.g. `doc_summary`) carry an independently server-generated UUID v4. P1 enforces **at most one running turn per chat**: if any turn in the chat is currently `running`, the system MUST reject the new request with `409 Conflict`, regardless of the `request_id` value. Additionally, if a `chat_turns` record with `state=running` exists for the same `(chat_id, request_id)`, the system MUST reject with `409 Conflict`. If a completed generation exists for the same `(chat_id, request_id)`, the system MUST replay the completed assistant response rather than starting a new provider request. Replay MUST be side-effect-free: no new quota reserve, no quota settlement, no billing/outbox event emission.
 
 Clients must not auto-retry with the same `request_id` after disconnect; recovery is via the Turn Status API (`GET /v1/chats/{chat_id}/turns/{request_id}`). A new `request_id` MUST be generated for every new user-initiated retry.
 
@@ -182,7 +184,9 @@ Clients must not auto-retry with the same `request_id` after disconnect; recover
 
 The system MUST persist all user and assistant messages. Conversation history access MUST be limited to the owning user within their tenant. On each new user message, the system MUST include relevant conversation history in the LLM context to maintain conversational coherence.
 
-**Rationale**: Multi-turn conversations require the AI to remember prior context within the same chat.
+The system MUST expose conversation history via `GET /v1/chats/{id}/messages` with cursor-based pagination (Page + PageInfo pattern) and OData v4 query support (`$orderby`, `$filter`, `$select`). Each message MUST include: a required `request_id` (UUID, always present and non-null — within a normal turn, user and assistant messages share the same value; system/background messages use an independently server-generated UUID v4) and a required `attachment_ids` field (always-present array of associated attachment UUIDs, empty array when none). Attachment details are not embedded; the UI fetches them individually via `GET /v1/chats/{id}/attachments/{attachment_id}` if needed.
+
+**Rationale**: Multi-turn conversations require the AI to remember prior context within the same chat. Cursor pagination ensures efficient history loading for long conversations.
 **Actors**: `cpt-cf-mini-chat-actor-chat-user`
 
 #### Streaming Cancellation
@@ -202,7 +206,9 @@ When a stream is cancelled or disconnects before a terminal completion, the syst
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-fr-file-upload`
 
-The system MUST allow users to upload document files to a chat. Uploaded documents are extracted, chunked, and indexed into the chat's dedicated vector store with `attachment_id` metadata. The system does NOT include full extracted file text in prompts; only relevant retrieved excerpts (top-k chunks) are included during file search. Attachment access MUST be limited to the owning user within their tenant. The system MUST return an attachment identifier and processing status.
+The system MUST allow users to upload document files to a chat. Uploaded documents are extracted, chunked, and indexed into the chat's dedicated vector store with `attachment_id` metadata. The system does NOT include full extracted file text in prompts; only relevant retrieved excerpts (top-k chunks) are included during file search. Attachment access MUST be limited to the owning user within their tenant. The system MUST return an attachment identifier and processing status (`pending`).
+
+The UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until the attachment status transitions to `ready` or `failed`. `doc_summary` is server-generated asynchronously by a background task and is never provided by the client; it is null until processing completes. If status is `failed`, the response includes an `error_code` field (stable internal code, no provider identifiers).
 
 **Rationale**: Users need to ground AI conversations in their own documents (contracts, policies, reports).
 **Actors**: `cpt-cf-mini-chat-actor-chat-user`
@@ -211,7 +217,7 @@ The system MUST allow users to upload document files to a chat. Uploaded documen
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-fr-image-upload`
 
-The system MUST allow users to upload image files (PNG, JPEG/JPG, WebP) to a chat as image attachments. Image attachments are stored via the provider Files API and referenced in Responses API calls as multimodal input. Image attachments are NOT indexed in vector stores and do NOT participate in file_search tool calls. The system MUST return an attachment identifier and processing status.
+The system MUST allow users to upload image files (PNG, JPEG/JPG, WebP) to a chat as image attachments. Image attachments are stored via the provider Files API and referenced in Responses API calls as multimodal input. Image attachments are NOT indexed in vector stores and do NOT participate in file_search tool calls. The system MUST return an attachment identifier and processing status (`pending`). The UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until the status transitions to `ready` or `failed`.
 
 **Image upload rules**:
 
@@ -260,7 +266,7 @@ The system MUST support web search as an LLM tool, explicitly enabled per reques
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-fr-doc-summary`
 
-The system MUST generate a brief summary of each uploaded document at upload time. The summary is stored and used in the conversation context to give the AI general awareness of attached documents without requiring a search call.
+The system MUST generate a brief summary of each uploaded document. Summary generation is triggered upon upload and runs asynchronously as a background task (`requester_type=system`). The summary (`doc_summary`) is stored and used in the conversation context to give the AI general awareness of attached documents without requiring a search call. `doc_summary` is server-generated and MUST NOT be provided by the client. The `doc_summary` field on the Attachment object is null until background processing completes; its current value is available via `GET /v1/chats/{id}/attachments/{attachment_id}`.
 
 Document summary generation MUST run as a background/system task (`requester_type=system`) and MUST NOT be charged to an arbitrary end user.
 
@@ -717,7 +723,7 @@ Turns stuck in `running` state beyond a configurable timeout (e.g. pod crash wit
 
 **Type**: REST API
 **Stability**: stable
-**Description**: Public HTTP API for chat management, message streaming, file upload, and message reactions. All endpoints require authentication and tenant license verification.
+**Description**: Public HTTP API for chat management, message listing with cursor pagination, message streaming, file upload, attachment status polling, and message reactions. All endpoints require authentication and tenant license verification.
 **Breaking Change Policy**: Versioned via URL prefix (`/v1/`). Breaking changes require new version.
 
 #### Turn Status (read-only) API
@@ -728,11 +734,12 @@ Support and UX recovery flows MUST be able to query authoritative turn state bac
 
 **Endpoint**: `GET /v1/chats/{chat_id}/turns/{request_id}`
 
-**Response**:
+**Response** (`chat_id` is not included — it is already present in the URL path):
 
-- `chat_id`
 - `request_id`
 - `state`: `running|done|error|cancelled`
+- `error_code` (nullable string) — terminal error code when `state` is `error` (e.g. `provider_error`, `orphan_timeout`). Null for non-error states and while running. Provider identifiers and billing outcome are not exposed.
+- `assistant_message_id` (nullable UUID) — persisted assistant message ID when `state` is `done`. Null while running, on error, or on cancellation. Allows clients to fetch the assistant message directly via `GET /v1/chats/{id}/messages?$filter=id eq '{assistant_message_id}'` without scanning full history.
 - `updated_at`
 
 **Internal-to-API state mapping**:
@@ -765,6 +772,8 @@ Support and UX recovery flows MUST be able to query authoritative turn state bac
 | `feature_not_licensed` | 403 | Tenant lacks `ai_chat` feature |
 | `insufficient_permissions` | 403 | Subject lacks permission for the requested action (AuthZ Resolver denied) |
 | `chat_not_found` | 404 | Chat does not exist or not accessible under current authorization constraints |
+| `generation_in_progress` | 409 | A generation is already running for this chat (one running turn per chat policy) |
+| `request_id_conflict` | 409 | The same `(chat_id, request_id)` is already in a non-replayable state (`running`, `failed`, or `cancelled`) |
 | `quota_exceeded` | 429 | Quota exhaustion. Always accompanied by `quota_scope`: `"tokens"` (token rate limits across all tiers exhausted, emergency flags, or all models disabled), `"uploads"` (daily upload quota exceeded), or `"web_search"` (per-user daily web search call quota exhausted) |
 | `rate_limited` | 429 | Provider upstream throttling (provider 429 after OAGW retry exhaustion) |
 | `file_too_large` | 413 | Uploaded file exceeds size limit |
@@ -869,16 +878,18 @@ Provider identifiers (`provider_file_id`, `provider_response_id`, `vector_store_
 2. System stores the file with the external provider
 3. System indexes the file in the tenant's document search index
 4. System enqueues a brief summary generation of the document (background, `requester_type=system`)
-5. System returns attachment ID and a processing status (`ready` on success)
+5. System returns attachment ID and processing status (`pending`)
+6. UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until status is `ready` or `failed`
+7. `doc_summary` is populated asynchronously by the server when processing completes
 
 **Postconditions**:
 - Document is searchable in subsequent chat messages
-- Document summary available for context assembly
+- Document summary available for context assembly (once background processing completes)
 
 **Alternative Flows**:
 - **Unsupported file type**: System rejects with `unsupported_file_type` error (HTTP 415)
 - **File too large**: System rejects with `file_too_large` error (HTTP 413)
-- **Processing failure**: Attachment status set to `failed`; user informed
+- **Processing failure**: Attachment status set to `failed` with `error_code`; user informed via polling
 
 #### UC-010: Upload Image and Ask About It
 
@@ -896,10 +907,11 @@ Provider identifiers (`provider_file_id`, `provider_response_id`, `vector_store_
 1. User uploads an image file to a chat
 2. System stores the image with the external provider via Files API
 3. System does NOT add the image to any vector store
-4. System returns attachment ID and a processing status (`ready` on success)
-5. User sends a message with the image explicitly attached to that turn via `attachment_ids` (message `content` remains plain text)
-6. System includes the image as a multimodal input (file ID reference) in the Responses API call
-7. System streams AI response that describes or reasons about the image content
+4. System returns attachment ID and processing status (`pending`)
+5. UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until status is `ready` or `failed`
+6. User sends a message with the image explicitly attached to that turn via `attachment_ids` (message `content` remains plain text)
+7. System includes the image as a multimodal input (file ID reference) in the Responses API call
+8. System streams AI response that describes or reasons about the image content
 
 **Postconditions**:
 - Image attachment persisted with `attachment_kind=image`

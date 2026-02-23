@@ -19,14 +19,14 @@ Long conversations are managed via thread summaries - a Level 1 compression stra
 | Requirement | Phase | Design Response |
 |-------------|-------|-----------------|
 | `cpt-cf-mini-chat-fr-chat-streaming` | `p1` | SSE streaming via the mini-chat module's domain service -> OAGW -> Responses API (OpenAI: `POST /v1/responses`; Azure OpenAI: `POST /openai/v1/responses`) |
-| `cpt-cf-mini-chat-fr-conversation-history` | `p1` | Postgres (infra/storage) persists all messages; recent messages loaded per request |
+| `cpt-cf-mini-chat-fr-conversation-history` | `p1` | Postgres (infra/storage) persists all messages; `GET /v1/chats/{id}/messages` with cursor pagination + OData query for history retrieval |
 | `cpt-cf-mini-chat-fr-file-upload` | `p1` | Upload via OAGW -> Files API (OpenAI: `POST /v1/files`; Azure OpenAI: `POST /openai/files`); metadata persisted via infra/storage repositories; file added to the chat's vector store. P1 uses `purpose="assistants"` for both providers (OpenAI also supports `purpose="user_data"`, but we use `assistants` to keep parity and because the files are used with Vector Stores / File Search). |
 | `cpt-cf-mini-chat-fr-image-upload` | `p1` | Image upload via OAGW -> Files API; metadata persisted via infra/storage repositories; NOT added to vector store. Images referenced as multimodal input (file ID) in Responses API calls. Model capability checked before outbound call; defensive `unsupported_media` error if model lacks image support (unreachable under P1 catalog invariant where all models include `VISION_INPUT`). |
 | `cpt-cf-mini-chat-fr-file-search` | `p1` | File Search tool call scoped to the chat's dedicated vector store (identical `file_search` tool on both OpenAI and Azure OpenAI Responses API) |
 | `cpt-cf-mini-chat-fr-web-search` | `p1` | Web Search tool included in Responses API request when explicitly enabled via `web_search.enabled` parameter; provider decides invocation; per-message and per-day call limits enforced; global `disable_web_search` kill switch |
-| `cpt-cf-mini-chat-fr-doc-summary` | `p1` | See **File Upload** sequence ("Generate doc summary" background variant) and `attachments.doc_summary` schema field |
+| `cpt-cf-mini-chat-fr-doc-summary` | `p1` | See **File Upload** sequence ("Generate doc summary" background variant) and `attachments.doc_summary` schema field. `doc_summary` is server-generated asynchronously; never provided by the client. Status polled via `GET /v1/chats/{id}/attachments/{attachment_id}`. |
 | `cpt-cf-mini-chat-fr-thread-summary` | `p1` | Periodic LLM-driven summarization of old messages; summary replaces history in context |
-| `cpt-cf-mini-chat-fr-chat-crud` | `p1` | REST endpoints for create/list/get/delete chats |
+| `cpt-cf-mini-chat-fr-chat-crud` | `p1` | REST endpoints for create/list/get/delete chats. Get returns metadata + message_count (no embedded messages). |
 | `cpt-cf-mini-chat-fr-temporary-chat` | `p2` | Toggle temporary flag; scheduled cleanup after 24h |
 | `cpt-cf-mini-chat-fr-chat-deletion-cleanup` | `p1` | See **Cleanup on Chat Deletion** |
 | `cpt-cf-mini-chat-fr-streaming-cancellation` | `p1` | See **Streaming Cancellation** sequence and quota bounded best-effort debit rules in `quota_service` |
@@ -275,8 +275,8 @@ Hard caps: token budgets (`max_input_tokens`, `max_output_tokens`) MUST remain c
 
 | Entity | Description |
 |--------|-------------|
-| Chat | A conversation belonging to a user within a tenant. Has title, **selected_model** (locked at creation from catalog; immutable), creation/update timestamps. Temporary flag reserved for P2. |
-| Message | A single turn in a chat (role: user/assistant/system). Stores content, token estimate, compression status. Assistant messages record the **effective_model** (the model actually used after quota/policy evaluation). |
+| Chat | A conversation belonging to a user within a tenant. Has title, **selected_model** (locked at creation from catalog; immutable), `message_count`, creation/update timestamps. Detail response returns metadata + message_count only; messages are loaded separately via `GET /v1/chats/{id}/messages`. Temporary flag reserved for P2. |
+| Message | A single turn in a chat (role: user/assistant/system). Stores content, token estimate, compression status. Always includes a required `attachment_ids` field — an always-present array of associated attachment UUIDs (empty array when none). Always includes a required `request_id` (UUID) — within a normal turn, user and assistant messages share the same value (turn correlation key); system/background messages use an independently server-generated UUID v4. Assistant messages record the **effective_model** (the model actually used after quota/policy evaluation). |
 | Attachment | File uploaded to a chat (document or image). Identified by internal `attachment_id` (UUID). Stores `provider_file_id` internally (never exposed via API). Documents are linked to the chat's vector store; images are not. Has processing status and `attachment_kind` (`document|image`). |
 | ThreadSummary | Compressed representation of older messages in a chat. Replaces old history in the context window. |
 | ChatVectorStore | Mapping from `(tenant_id, chat_id)` to provider `vector_store_id` (OpenAI or Azure OpenAI Vector Stores API). One vector store per chat (created on first document upload). Physical and logical isolation are both per chat (see File Search Retrieval Scope). |
@@ -405,11 +405,13 @@ Covers public API from PRD: `cpt-cf-mini-chat-interface-public-api`
 |--------|------|-------------|-----------|
 | `POST` | `/v1/chats` | Create a new chat | stable |
 | `GET` | `/v1/chats` | List chats for current user | stable |
-| `GET` | `/v1/chats/{id}` | Get chat metadata + recent messages | stable |
+| `GET` | `/v1/chats/{id}` | Get chat metadata + message_count (no embedded messages) | stable |
 | `DELETE` | `/v1/chats/{id}` | Delete chat (with retention cleanup) | stable |
 | `POST` | `/v1/chats/{id}:temporary` | Toggle temporary flag (24h TTL) | P2 |
+| `GET` | `/v1/chats/{id}/messages` | List messages with cursor pagination + OData query | stable |
 | `POST` | `/v1/chats/{id}/messages:stream` | Send message, receive SSE stream | stable |
 | `POST` | `/v1/chats/{id}/attachments` | Upload file attachment | stable |
+| `GET` | `/v1/chats/{id}/attachments/{attachment_id}` | Get attachment status and metadata (polling) | stable |
 | `GET` | `/v1/chats/{id}/turns/{request_id}` | Get authoritative turn status (read-only) | stable |
 | `POST` | `/v1/chats/{id}/turns/{request_id}:retry` | Retry last turn (new generation) | stable |
 | `PATCH` | `/v1/chats/{id}/turns/{request_id}` | Edit last turn (replace content + regenerate) | stable |
@@ -429,6 +431,56 @@ Request body:
 - `model`: If provided, MUST reference a valid `model_id` in the model catalog with `status: enabled`. If absent, the system uses the `is_default` premium model (see Model Catalog Configuration). The model is stored on the chat and locked for all subsequent messages (see `cpt-cf-mini-chat-constraint-model-locked-per-chat`). Returns HTTP 400 if the model_id is not in the catalog or is disabled.
 
 Response includes the resolved `model` in chat metadata. `tenant_id` and `user_id` are NOT included in API response bodies — identity is derived from the authentication context. These fields exist in the database schema for internal use only.
+
+**Get Chat** (`GET /v1/chats/{id}`):
+
+Returns chat metadata and `message_count`. Does NOT embed messages. The UI MUST call `GET /v1/chats/{id}/messages` to load conversation history with cursor pagination.
+
+Response:
+```json
+{
+  "id": "uuid",
+  "model": "gpt-5.2",
+  "title": "Q3 Financial Analysis",
+  "is_temporary": false,
+  "message_count": 12,
+  "created_at": "2025-06-15T10:30:00Z",
+  "updated_at": "2025-06-15T10:36:30Z"
+}
+```
+
+**List Messages** (`GET /v1/chats/{id}/messages`):
+
+Returns paginated messages using cursor-based pagination with OData v4 query support. Default ordering is `created_at asc` (chronological).
+
+Query parameters:
+- `limit` (integer, optional, default 20, max 100)
+- `cursor` (string, optional) — opaque cursor for next/previous page
+- `$select` (string, optional) — OData v4 field projection (top-level fields including `attachment_ids`)
+- `$orderby` (string, optional) — allowed: `created_at asc|desc`, `id asc|desc`
+- `$filter` (string, optional) — allowed fields and operators: `created_at` (eq, ne, gt, ge, lt, le), `role` (eq, ne, in), `id` (eq, ne, in)
+
+Response follows the platform Page + PageInfo convention:
+```json
+{
+  "items": [Message],
+  "page_info": {
+    "limit": 20,
+    "next_cursor": "opaque-string-or-null",
+    "prev_cursor": "opaque-string-or-null"
+  }
+}
+```
+
+Each `Message` includes: a required `request_id` (UUID, always present and non-null — within a normal turn, user and assistant messages share the same value; system/background messages use a server-generated UUID v4) and a required `attachment_ids` field (always-present array of attachment UUIDs, empty array when none). Attachment details are fetched individually via `GET /v1/chats/{id}/attachments/{attachment_id}` if needed.
+
+**Get Attachment** (`GET /v1/chats/{id}/attachments/{attachment_id}`):
+
+Returns the current status and metadata of an attachment. The UI polls this endpoint after upload to track processing progress (`pending` → `ready` or `pending` → `failed`).
+
+Response: the full `Attachment` object including `attachment_id`, `status`, `kind`, `filename`, `content_type`, `size_bytes`, `doc_summary`, `error_code`, and timestamps. `doc_summary` is server-generated asynchronously and null until background processing completes (always null for images). `error_code` is a stable internal code present only when `status=failed`; it never contains provider identifiers.
+
+Standard errors: 403 (license/permissions), 404 (attachment not found or not accessible).
 
 **Streaming Contract** (`POST /v1/chats/{id}/messages:stream`) — **ID**: `cpt-cf-mini-chat-contract-sse-streaming`:
 
@@ -474,7 +526,7 @@ If any of the above validations fail, the request MUST be rejected with an appro
 | Completed generation exists for key | Return a fast replay SSE stream without triggering a new provider request: one `delta` event containing the full persisted assistant text, then `citations` if available, then `done`. |
 | No record for key | Start a new generation normally (subject to the Parallel Turn Policy below). |
 
-If `request_id` is omitted, the server treats the request as non-idempotent (no replay semantics).
+If `request_id` is omitted in the request body, the server MUST generate a UUID v4 and assign it as the turn's `request_id`. The generated key participates in normal idempotency semantics: if the client persists the server-assigned value (e.g. from the SSE `done` event or Turn Status response), it can resubmit it for replay or recovery. In the public DTO, `request_id` is always present and non-null on every Message. Within a normal turn, the user message and assistant response always share the same `request_id` (turn correlation key). System/background messages (e.g. `doc_summary`, `thread_summary`) carry an independently server-generated UUID v4 and do not correspond to `chat_turns` rows.
 
 **Parallel turn guard**: independently of idempotency, the server MUST reject with `409 Conflict` any request to a chat that already has a `running` turn — even if the new request carries a different (or no) `request_id`. P1 enforces at most one running turn per chat. See **Parallel Turn Policy (P1)** (section 3.7).
 
@@ -501,16 +553,15 @@ To support reconnect UX and reduce support reliance on direct DB inspection, the
 
 **Endpoint**: `GET /v1/chats/{id}/turns/{request_id}`
 
-**Response**:
+**Response** (`chat_id` is not included — it is already present in the URL path):
 
-- `chat_id`
 - `request_id`
 - `state`: `running|done|error|cancelled`
 - `error_code` (nullable string) — terminal error code when `state` is `error` (e.g. `provider_error`, `orphan_timeout`). Null for non-error states and while running. Mapped from `chat_turns.error_code`. Provider identifiers and billing outcome are not exposed.
 - `assistant_message_id` (nullable UUID) — persisted assistant message ID when `state` is `done`. Null while running, on error, or on cancellation. Allows clients to fetch the assistant message directly without listing all messages.
 - `updated_at`
 
-Turn Status is authoritative for lifecycle state resolution and provides actionable context for disconnect recovery. Clients can use `error_code` to display an appropriate error message and `assistant_message_id` to fetch completed content, both without additional round-trips. Billing outcome, internal settlement details, and provider internals are not exposed via this endpoint in P1.
+Turn Status is authoritative for lifecycle state resolution after disconnect. `error_code` provides actionable terminal error categorization so clients can display an appropriate error message without further queries. `assistant_message_id` lets clients fetch the completed assistant message directly by ID without scanning full message history; retrieving the message content itself requires one follow-up request (`GET /v1/chats/{id}/messages?$filter=id eq '{assistant_message_id}'`). Billing outcome, internal settlement details, and provider internals are not exposed via this endpoint in P1.
 
 **Internal-to-API state mapping**:
 
@@ -709,6 +760,8 @@ For streaming endpoints, failures before any streaming begins MUST be returned a
 | `feature_not_licensed` | 403 | Tenant lacks `ai_chat` feature |
 | `insufficient_permissions` | 403 | Subject lacks permission for the requested action (AuthZ Resolver denied) |
 | `chat_not_found` | 404 | Chat does not exist or not accessible under current authorization constraints |
+| `generation_in_progress` | 409 | A generation is already running for this chat (one running turn per chat policy). Always pre-stream JSON. |
+| `request_id_conflict` | 409 | The same `(chat_id, request_id)` is already in a non-replayable state (`running`, `failed`, or `cancelled`). Always pre-stream JSON. |
 | `quota_exceeded` | 429 | Quota exhaustion. Always accompanied by a `quota_scope` field: `"tokens"` (token rate limits across all tiers exhausted, emergency flags, or all models disabled), `"uploads"` (daily upload quota exceeded for the attachment endpoint), or `"web_search"` (per-user daily web search call quota exhausted). |
 | `web_search_disabled` | 400 | Request includes `web_search.enabled=true` but the global `disable_web_search` kill switch is active |
 | `rate_limited` | 429 | Provider upstream throttling (provider 429 after OAGW retry exhaustion) |
@@ -889,10 +942,16 @@ sequenceDiagram
 
 **Description**: File upload flow - the file is uploaded to the LLM provider (OpenAI or Azure OpenAI) via OAGW. The subsequent steps depend on attachment kind:
 
-- **Document** (`attachment_kind=document`): file is added to the chat's vector store (created on first upload), optionally summarized, and metadata is persisted locally. Status transitions: `pending` -> `ready`.
-- **Image** (`attachment_kind=image`): file is uploaded to the provider via Files API but is NOT added to the vector store and NOT summarized. Status transitions: `pending` -> `ready`. The image is available for multimodal input in subsequent Responses API calls via the internally stored `provider_file_id` (never exposed to clients). **Invariant**: `status=ready` implies `provider_file_id` is present AND the provider upload succeeded. If the provider file is deleted or becomes inaccessible (e.g., via cleanup), the attachment status MUST transition away from `ready` (to `failed` or be removed).
+- **Document** (`attachment_kind=document`): file is added to the chat's vector store (created on first upload), optionally summarized, and metadata is persisted locally. Status transitions: `pending` -> `ready` or `pending` -> `failed`.
+- **Image** (`attachment_kind=image`): file is uploaded to the provider via Files API but is NOT added to the vector store and NOT summarized. Status transitions: `pending` -> `ready` or `pending` -> `failed`. The image is available for multimodal input in subsequent Responses API calls via the internally stored `provider_file_id` (never exposed to clients). **Invariant**: `status=ready` implies `provider_file_id` is present AND the provider upload succeeded. If the provider file is deleted or becomes inaccessible (e.g., via cleanup), the attachment status MUST transition away from `ready` (to `failed` or be removed).
 
 Attachment kind is derived from `content_type`: MIME types matching `image/png`, `image/jpeg`, or `image/webp` are classified as `image`; all other supported types are classified as `document`.
+
+**Attachment status polling**: After upload returns 201 with `status: pending`, the UI polls `GET /v1/chats/{id}/attachments/{attachment_id}` until the status transitions to `ready` or `failed`. `doc_summary` is server-generated asynchronously (background task, `requester_type=system`) and is null until processing completes; it is never provided by the client. If status is `failed`, the response includes an `error_code` field with a stable internal error code (no provider identifiers).
+
+**UI rendering flow for chat history**:
+1. `GET /v1/chats/{id}` returns chat metadata + `message_count` (no embedded messages).
+2. `GET /v1/chats/{id}/messages?limit=...&cursor=...` loads paginated message history. Each message includes `attachment_ids` — a lightweight reference array; attachment details are fetched individually via `GET /v1/chats/{id}/attachments/{attachment_id}` if the UI needs to display file metadata or status.
 
 #### Streaming Cancellation
 
@@ -1045,7 +1104,7 @@ Tracks idempotency and in-progress generation state for `request_id`. This avoid
 | provider_response_id | VARCHAR(128) | Provider response ID (nullable) |
 | assistant_message_id | UUID | Persisted assistant message ID (nullable until completed) |
 | error_code | VARCHAR(64) | Terminal error code (nullable) |
-| reserve_tokens | BIGINT | Preflight token reserve (`estimated_input_tokens + max_output_tokens`). Persisted at preflight before any provider call. Nullable — NULL only for turns that fail before a reserve is taken (pre-reserve failures). Immutable after insert. Used exclusively for deterministic reconciliation under ABORTED and post-provider-start FAILED outcomes (sections 5.3, 5.4). |
+| reserve_tokens | BIGINT | Preflight token reserve (`estimated_input_tokens + max_output_tokens`). Persisted at preflight before any outbound provider call. Nullable - NULL only for turns that fail before a reserve is taken (pre-reserve failures). Immutable after insert. Used for deterministic reconciliation under ABORTED and post-provider-start FAILED outcomes (sections 5.3, 5.4, 5.5). |
 | deleted_at | TIMESTAMPTZ | Soft-delete timestamp for turn mutations (nullable). Set when a turn is replaced by retry or edit, or explicitly deleted. |
 | replaced_by_request_id | UUID | `request_id` of the new turn that replaced this one via retry or edit (nullable). Stored on the old (soft-deleted) turn to provide audit traceability. Not used by delete. |
 | started_at | TIMESTAMPTZ | DB-assigned turn creation timestamp (set on INSERT). Used for ordering and latest-turn selection in P1. |
@@ -1305,8 +1364,10 @@ The authorized resource is **Chat**. Sub-resources (Message, Attachment, ThreadS
 | `GET /v1/chats/{id}` | `read` | present | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 | `DELETE /v1/chats/{id}` | `delete` | present | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 | `POST /v1/chats/{id}:temporary` (P2) | `update` | present | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
+| `GET /v1/chats/{id}/messages` | `list_messages` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 | `POST /v1/chats/{id}/messages:stream` | `send_message` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 | `POST /v1/chats/{id}/attachments` | `upload` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
+| `GET /v1/chats/{id}/attachments/{attachment_id}` | `read_attachment` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 | `GET /v1/chats/{id}/turns/{request_id}` | `read_turn` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 | `POST /v1/chats/{id}/turns/{request_id}:retry` | `retry_turn` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 | `PATCH /v1/chats/{id}/turns/{request_id}` | `edit_turn` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
@@ -1315,7 +1376,7 @@ The authorized resource is **Chat**. Sub-resources (Message, Attachment, ThreadS
 | `DELETE /v1/chats/{id}/messages/{msg_id}/reaction` | `delete_reaction` | present (chat_id) | `true` | `eq(owner_tenant_id)` + `eq(user_id)` |
 
 **Notes**:
-- `send_message`, `upload`, `retry_turn`, `edit_turn`, `delete_turn`, `react`, and `delete_reaction` are actions on the Chat resource, not on Message or Turn sub-resources. The `resource.id` is the chat's ID.
+- `list_messages`, `send_message`, `upload`, `read_attachment`, `retry_turn`, `edit_turn`, `delete_turn`, `react`, and `delete_reaction` are actions on the Chat resource, not on Message or Turn sub-resources. The `resource.id` is the chat's ID.
 - For streaming (`send_message`, `retry_turn`, `edit_turn`), authorization is evaluated once at SSE connection establishment. The entire streaming session operates under the initial authorization decision. No per-message re-authorization.
 - For `create`, the PEP passes `resource.properties.owner_tenant_id` and `resource.properties.user_id` from the SecurityContext. The PDP validates permission without returning constraints.
 - Turn mutation endpoints (`retry_turn`, `edit_turn`, `delete_turn`) additionally enforce latest-turn and terminal-state checks in the domain service after authorization succeeds (see section 3.9).
@@ -1508,7 +1569,7 @@ Mini Chat recognizes the following token scopes for third-party application narr
 | Scope | Permits |
 |-------|---------|
 | `ai:mini_chat` | All mini-chat operations (umbrella scope) |
-| `ai:mini_chat:read` | `list`, `read` actions only |
+| `ai:mini_chat:read` | `list`, `read`, `list_messages`, `read_attachment`, `read_turn` actions only |
 | `ai:mini_chat:write` | `create`, `update`, `delete`, `send_message`, `upload`, `retry_turn`, `edit_turn`, `delete_turn`, `react`, `delete_reaction` actions |
 
 First-party applications (UI) use `token_scopes: ["*"]`. Third-party integrations receive narrowed scopes. Scope enforcement is handled by the PDP - the PEP includes `token_scopes` in the evaluation request context.
@@ -1594,10 +1655,9 @@ PATCH MUST NOT introduce a separate execution path for settlement or outbox emis
 
 **Request body**: none
 
-**Response** (success): `200 OK` with:
+**Response** (success): `200 OK` with (`chat_id` omitted — already in URL path):
 ```json
 {
-  "chat_id": "uuid",
   "request_id": "uuid",
   "deleted": true
 }
@@ -1683,7 +1743,7 @@ These events are emitted to platform `audit_service` following the same emission
 **Included in P1**:
 - Dedicated vector store per chat (created on first document upload); physical and logical isolation both per chat
 - Thread summary as only compression mechanism
-- On-upload document summary via File Search (Variant 1 from draft)
+- On-upload document summary (async background LLM call, `requester_type=system`; polled via `GET /v1/chats/{id}/attachments/{attachment_id}`)
 - Image upload and image-aware chat via multimodal Responses API input (PNG/JPEG/WebP); images stored via Files API, not indexed in vector stores
 - Retry, edit, and delete for the last turn only (tail-only mutation; see section 3.9)
 - Quota enforcement: daily + monthly per user; token-based rate limits per tier tracked in real-time; premium models have stricter limits, standard models have separate, higher limits; when all tiers are exhausted, reject with `quota_exceeded`; image counters enforced separately

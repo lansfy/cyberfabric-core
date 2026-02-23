@@ -96,34 +96,13 @@
         "description": "Returns chats for the authenticated user ordered by most recent activity (updated_at DESC). Supports cursor-based pagination and OData `$select` field projection. This endpoint supports OData `$select` for sparse field projection. Field names are case-insensitive. Dot notation is supported for nested objects.",
         "parameters": [
           {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "description": "Opaque cursor for fetching the next page.",
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/parameters/PaginationCursor"
           },
           {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "description": "Maximum number of items to return.",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PaginationLimit"
           },
           {
-            "name": "$select",
-            "in": "query",
-            "required": false,
-            "description": "OData field projection parameter. Comma-separated list of fields. Supports dot notation for nested fields. Case-insensitive.",
-            "schema": {
-              "type": "string"
-            }
+            "$ref": "#/components/parameters/ODataSelect"
           }
         ],
         "responses": {
@@ -142,16 +121,7 @@
                       }
                     },
                     "page_info": {
-                      "type": "object",
-                      "required": ["has_next"],
-                      "properties": {
-                        "has_next": {
-                          "type": "boolean"
-                        },
-                        "next_cursor": {
-                          "type": ["string", "null"]
-                        }
-                      }
+                      "$ref": "#/components/schemas/PageInfo"
                     }
                   }
                 }
@@ -173,15 +143,24 @@
       "get": {
         "operationId": "getChat",
         "tags": ["chats"],
-        "summary": "Get chat with recent messages",
-        "description": "Returns chat metadata (including selected model) and the most recent messages.",
+        "summary": "Get chat metadata",
+        "description": "Returns chat metadata (including selected model) and message_count. Does NOT embed messages; use `GET /v1/chats/{id}/messages` to load conversation history with cursor pagination.",
         "responses": {
           "200": {
-            "description": "Chat detail with recent messages.",
+            "description": "Chat metadata with message count.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ChatDetail"
+                },
+                "example": {
+                  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                  "model": "gpt-5.2",
+                  "title": "Q3 Financial Analysis",
+                  "is_temporary": false,
+                  "message_count": 12,
+                  "created_at": "2025-06-15T10:30:00Z",
+                  "updated_at": "2025-06-15T10:36:30Z"
                 }
               }
             }
@@ -241,7 +220,7 @@
         },
         "responses": {
           "200": {
-            "description": "SSE stream opened. Events delivered as `text/event-stream`. See operation description for event types and payload schemas.",
+            "description": "SSE stream opened. Events delivered as `text/event-stream`. HTTP 200 does NOT guarantee success — terminal failures after streaming starts are delivered as SSE `event: error` (payload: SseErrorEvent) while the HTTP status remains 200. Non-200 JSON error responses (4xx/5xx below) occur only when the failure is detected before the SSE stream is opened. See operation description for event types and payload schemas.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -312,7 +291,7 @@
             }
           },
           "429": {
-            "description": "Quota or rate limit exceeded. Code: `quota_exceeded` (with `quota_scope`: `tokens` or `web_search`) for user quota exhaustion, or `rate_limited` for upstream provider throttling after OAGW retry exhaustion. Clients MUST use the `code` field to distinguish the two.",
+            "description": "Quota or rate limit exceeded. Code: `quota_exceeded` (with `quota_scope`: `tokens` or `web_search`) for user quota exhaustion (always pre-stream), or `rate_limited` for upstream provider throttling after OAGW retry exhaustion. `rate_limited` may also appear as a terminal SSE `event: error` if the provider returns 429 mid-stream (HTTP status remains 200 in that case). Clients MUST use the `code` field to distinguish the two.",
             "content": {
               "application/json": {
                 "schema": {
@@ -375,7 +354,7 @@
         },
         "responses": {
           "201": {
-            "description": "Attachment created. Processing is asynchronous; poll chat detail or listen for status transitions.",
+            "description": "Attachment created. Processing is asynchronous; poll `GET /v1/chats/{id}/attachments/{attachment_id}` for status transitions (pending -> ready or pending -> failed). `doc_summary` is server-generated and null until background processing completes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -443,6 +422,143 @@
         }
       }
     },
+    "/v1/chats/{id}/messages": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        }
+      ],
+      "get": {
+        "operationId": "listMessages",
+        "tags": ["messages"],
+        "summary": "List messages with cursor pagination",
+        "description": "Returns paginated messages for a chat using cursor-based pagination with OData query support. Default ordering is `created_at asc` (chronological). Use `$orderby`, `$filter`, and `$select` for advanced queries.\n\n**OData support**:\n- `$orderby`: `created_at asc|desc`, `id asc|desc`\n- `$filter`: `created_at` (eq, ne, gt, ge, lt, le), `role` (eq, ne, in), `id` (eq, ne, in)\n- `$select`: any top-level field (including `attachment_ids`)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaginationLimit"
+          },
+          {
+            "$ref": "#/components/parameters/PaginationCursor"
+          },
+          {
+            "$ref": "#/components/parameters/ODataSelect"
+          },
+          {
+            "$ref": "#/components/parameters/ODataOrderBy"
+          },
+          {
+            "$ref": "#/components/parameters/ODataFilter"
+          }
+        ],
+        "x-odata-orderby": {
+          "supported_fields": ["created_at", "id"],
+          "supported_directions": ["asc", "desc"],
+          "default": "created_at asc"
+        },
+        "x-odata-filter": {
+          "supported_fields": {
+            "created_at": ["eq", "ne", "gt", "ge", "lt", "le"],
+            "role": ["eq", "ne", "in"],
+            "id": ["eq", "ne", "in"]
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Paginated list of messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagesPage"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "e5f6a7b8-9012-4cde-f123-456789abcdef",
+                      "role": "user",
+                      "content": "What does the document say about Q3 revenue?",
+                      "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                      "model": null,
+                      "input_tokens": null,
+                      "output_tokens": null,
+                      "attachment_ids": ["c3d4e5f6-7890-4abc-def1-234567890abc"],
+                      "created_at": "2025-06-15T10:35:30Z"
+                    },
+                    {
+                      "id": "d4e5f6a7-8901-4bcd-ef12-3456789abcde",
+                      "role": "assistant",
+                      "content": "Based on the Q3 report, revenue grew 15%...",
+                      "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                      "model": "gpt-5.2",
+                      "input_tokens": 500,
+                      "output_tokens": 120,
+                      "attachment_ids": [],
+                      "created_at": "2025-06-15T10:35:45Z"
+                    }
+                  ],
+                  "page_info": {
+                    "limit": 20,
+                    "next_cursor": "eyJjcmVhdGVkX2F0IjoiMjAyNS0wNi0xNVQxMDozNTo0NVoiLCJpZCI6ImQ0ZTVmNmE3In0=",
+                    "prev_cursor": null
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/v1/chats/{id}/attachments/{attachment_id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/AttachmentId"
+        }
+      ],
+      "get": {
+        "operationId": "getAttachment",
+        "tags": ["attachments"],
+        "summary": "Get attachment status and metadata",
+        "description": "Returns the current status and metadata of an attachment. Use this endpoint to poll for processing completion after upload (status transitions: `pending` -> `ready` or `pending` -> `failed`). The `doc_summary` field is populated asynchronously by a server background task and is null until processing completes (always null for images).",
+        "responses": {
+          "200": {
+            "description": "Attachment metadata and status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                },
+                "example": {
+                  "attachment_id": "c3d4e5f6-7890-4abc-def1-234567890abc",
+                  "status": "ready",
+                  "kind": "document",
+                  "filename": "Q3_Report.pdf",
+                  "content_type": "application/pdf",
+                  "size_bytes": 245000,
+                  "doc_summary": "Q3 financial report showing 15% revenue growth and expanded margins.",
+                  "error_code": null,
+                  "summary_updated_at": "2025-06-15T10:35:30Z",
+                  "created_at": "2025-06-15T10:35:00Z"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/v1/chats/{id}/turns/{request_id}": {
       "parameters": [
         {
@@ -456,7 +572,7 @@
         "operationId": "getTurnStatus",
         "tags": ["turns"],
         "summary": "Get authoritative turn status",
-        "description": "Returns the authoritative server-side turn state for a given request_id. Used by the UI for disconnect recovery. Internal states map to API states: running->running, completed->done, failed->error, cancelled->cancelled. Includes error_code (when state is 'error') and assistant_message_id (when state is 'done') so clients can resolve uncertainty after disconnect without additional round-trips. Billing outcome and provider internals are not exposed.",
+        "description": "Returns the authoritative server-side turn state for a given request_id. Used by the UI for disconnect recovery. Internal states map to API states: running->running, completed->done, failed->error, cancelled->cancelled. Includes error_code (when state is 'error') and assistant_message_id (when state is 'done') so clients can resolve lifecycle uncertainty after disconnect without listing or scanning message history. Retrieving the assistant message content itself may require one follow-up request. Billing outcome and provider internals are not exposed.",
         "responses": {
           "200": {
             "description": "Turn status.",
@@ -466,7 +582,6 @@
                   "$ref": "#/components/schemas/TurnStatus"
                 },
                 "example": {
-                  "chat_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                   "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
                   "state": "done",
                   "error_code": null,
@@ -541,7 +656,7 @@
             }
           },
           "429": {
-            "description": "Quota or rate limit exceeded for regeneration. Code: `quota_exceeded` (`quota_scope`: `tokens`) for user quota exhaustion, or `rate_limited` for upstream provider throttling.",
+            "description": "Quota or rate limit exceeded for regeneration. Code: `quota_exceeded` (`quota_scope`: `tokens`) for user quota exhaustion (always pre-stream), or `rate_limited` for upstream provider throttling. `rate_limited` may also appear as a terminal SSE `event: error` mid-stream (HTTP 200). Same semantics as sendMessage.",
             "content": {
               "application/json": {
                 "schema": {
@@ -606,7 +721,6 @@
                   "$ref": "#/components/schemas/TurnDeleteResponse"
                 },
                 "example": {
-                  "chat_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                   "request_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
                   "deleted": true
                 }
@@ -695,7 +809,7 @@
             }
           },
           "429": {
-            "description": "Quota or rate limit exceeded for regeneration. Code: `quota_exceeded` (`quota_scope`: `tokens`) for user quota exhaustion, or `rate_limited` for upstream provider throttling.",
+            "description": "Quota or rate limit exceeded for regeneration. Code: `quota_exceeded` (`quota_scope`: `tokens`) for user quota exhaustion (always pre-stream), or `rate_limited` for upstream provider throttling. `rate_limited` may also appear as a terminal SSE `event: error` mid-stream (HTTP 200). Same semantics as sendMessage.",
             "content": {
               "application/json": {
                 "schema": {
@@ -847,6 +961,64 @@
           "type": "string",
           "format": "uuid"
         }
+      },
+      "AttachmentId": {
+        "name": "attachment_id",
+        "in": "path",
+        "required": true,
+        "description": "Attachment UUID.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "PaginationLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Maximum number of items to return.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        }
+      },
+      "PaginationCursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor for fetching the next or previous page.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ODataSelect": {
+        "name": "$select",
+        "in": "query",
+        "required": false,
+        "description": "OData v4 field projection. Comma-separated list of top-level fields. Case-insensitive.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ODataOrderBy": {
+        "name": "$orderby",
+        "in": "query",
+        "required": false,
+        "description": "OData v4 ordering expression. Restricted to supported fields and directions.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ODataFilter": {
+        "name": "$filter",
+        "in": "query",
+        "required": false,
+        "description": "OData v4 filter expression. Restricted to supported fields and operators.",
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "responses": {
@@ -892,6 +1064,8 @@
               "insufficient_permissions",
               "chat_not_found",
               "message_not_found",
+              "generation_in_progress",
+              "request_id_conflict",
               "rate_limited",
               "web_search_disabled",
               "file_too_large",
@@ -965,21 +1139,19 @@
         }
       },
       "ChatDetail": {
-        "description": "Chat metadata with recent messages. Returned by getChat.",
+        "description": "Chat metadata with message count. Returned by getChat. Does NOT embed messages; use `GET /v1/chats/{id}/messages` for paginated conversation history.",
         "allOf": [
           {
             "$ref": "#/components/schemas/Chat"
           },
           {
             "type": "object",
-            "required": ["messages"],
+            "required": ["message_count"],
             "properties": {
-              "messages": {
-                "type": "array",
-                "description": "Most recent messages in chronological order, deterministically ordered by (created_at, id). The server enforces an internal configurable limit. This endpoint does not support pagination at P1.",
-                "items": {
-                  "$ref": "#/components/schemas/Message"
-                }
+              "message_count": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Total number of non-deleted messages in this chat. UI uses this to decide whether to fetch history via GET /v1/chats/{id}/messages."
               }
             }
           }
@@ -987,21 +1159,17 @@
       },
       "Message": {
         "type": "object",
-        "required": ["id", "chat_id", "role", "content", "created_at"],
+        "required": ["id", "request_id", "role", "content", "attachment_ids", "created_at"],
         "description": "A single message in a chat (user, assistant, or system).",
         "properties": {
           "id": {
             "type": "string",
             "format": "uuid"
           },
-          "chat_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "request_id": {
-            "type": ["string", "null"],
+            "type": "string",
             "format": "uuid",
-            "description": "Client-generated idempotency key. Null for system messages."
+            "description": "Turn correlation key (doubles as idempotency key). Within a normal turn the user message and the assistant response share the same request_id. Client-generated, or server-generated UUID v4 when the client omits it. System/background messages (e.g. doc_summary) carry an independently server-generated UUID v4. Always present and non-null."
           },
           "role": {
             "type": "string",
@@ -1021,6 +1189,14 @@
           "output_tokens": {
             "type": ["integer", "null"],
             "description": "Actual output tokens. Present on assistant messages."
+          },
+          "attachment_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Always-present reference list of attachment UUIDs associated with this message. Empty array when no attachments. Details are fetched via GET /v1/chats/{id}/attachments/{attachment_id} if needed."
           },
           "created_at": {
             "type": "string",
@@ -1061,11 +1237,11 @@
           },
           "doc_summary": {
             "type": ["string", "null"],
-            "description": "LLM-generated document summary. Present for documents after background processing completes; always null for images."
+            "description": "Server-generated document summary (asynchronous background task). Null until processing completes; always null for images. Never provided by the client."
           },
-          "summary_model": {
+          "error_code": {
             "type": ["string", "null"],
-            "description": "Model used for summary generation."
+            "description": "Stable internal error code when status is 'failed' (e.g. 'index_failed', 'provider_upload_failed'). Null when status is 'pending' or 'ready'. No provider identifiers in this field."
           },
           "summary_updated_at": {
             "type": ["string", "null"],
@@ -1080,13 +1256,9 @@
       },
       "TurnStatus": {
         "type": "object",
-        "required": ["chat_id", "request_id", "state", "updated_at"],
-        "description": "Authoritative server-side turn state for lifecycle resolution and disconnect recovery. Internal-to-API state mapping: running->running, completed->done, failed->error, cancelled->cancelled. Terminal states (done, error, cancelled) are immutable — once reached, the state never changes. Exactly one terminal outcome exists per (chat_id, request_id) pair. All terminal states indicate that quota settlement has been finalized atomically with the state transition. A state of 'done' guarantees that the full assistant message content is durably persisted and available for idempotent replay. Optional fields (error_code, assistant_message_id) provide actionable context so clients can resolve uncertainty after disconnect without an additional round-trip. Billing outcome and provider internals are not exposed.",
+        "required": ["request_id", "state", "updated_at"],
+        "description": "Authoritative server-side turn state for lifecycle resolution and disconnect recovery. Internal-to-API state mapping: running->running, completed->done, failed->error, cancelled->cancelled. Terminal states (done, error, cancelled) are immutable — once reached, the state never changes. Exactly one terminal outcome exists per (chat_id, request_id) pair. All terminal states indicate that quota settlement has been finalized atomically with the state transition. A state of 'done' guarantees that the full assistant message content is durably persisted and available for idempotent replay. Optional fields (error_code, assistant_message_id) provide actionable context so clients can resolve lifecycle uncertainty after disconnect without listing or scanning message history; retrieving the assistant message content may require one follow-up request. Billing outcome and provider internals are not exposed. chat_id is not included in the response body because it is already present in the URL path.",
         "properties": {
-          "chat_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "request_id": {
             "type": "string",
             "format": "uuid"
@@ -1105,7 +1277,7 @@
             "type": "string",
             "format": "uuid",
             "nullable": true,
-            "description": "Persisted assistant message ID when state is 'done'. Null while running, on error, or on cancellation. Clients can use this to fetch the assistant message via GET /v1/chats/{id}/messages without listing all messages."
+            "description": "Persisted assistant message ID when state is 'done'. Null while running, on error, or on cancellation. Clients can use this to fetch the assistant message via `GET /v1/chats/{id}/messages?$filter=id eq '{assistant_message_id}'` without scanning full history."
           },
           "updated_at": {
             "type": "string",
@@ -1115,12 +1287,8 @@
       },
       "TurnDeleteResponse": {
         "type": "object",
-        "required": ["chat_id", "request_id", "deleted"],
+        "required": ["request_id", "deleted"],
         "properties": {
-          "chat_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "request_id": {
             "type": "string",
             "format": "uuid"
@@ -1399,6 +1567,41 @@
             "type": "boolean",
             "default": false,
             "description": "When true, the web_search tool is included in the provider request. The provider decides whether to invoke the tool. If the global disable_web_search kill switch is active, the request is rejected with web_search_disabled (400)."
+          }
+        }
+      },
+      "PageInfo": {
+        "type": "object",
+        "required": ["limit"],
+        "description": "Cursor-based pagination metadata following the platform OData-style convention.",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "The limit that was applied for this page."
+          },
+          "next_cursor": {
+            "type": ["string", "null"],
+            "description": "Opaque cursor for fetching the next page. Null when there are no more results."
+          },
+          "prev_cursor": {
+            "type": ["string", "null"],
+            "description": "Opaque cursor for fetching the previous page. Null on the first page."
+          }
+        }
+      },
+      "MessagesPage": {
+        "type": "object",
+        "required": ["items", "page_info"],
+        "description": "Paginated list of messages following the platform Page + PageInfo convention.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          },
+          "page_info": {
+            "$ref": "#/components/schemas/PageInfo"
           }
         }
       },
