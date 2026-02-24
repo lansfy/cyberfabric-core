@@ -20,6 +20,7 @@ The system supports various conversation patterns including traditional linear c
 - **Message Routing Flexibility**: Decouples message processing logic from infrastructure, enabling easy switching between different backends (AI models, custom logic, human operators)
 - **Conversation Variants**: Provides built-in support for message regeneration and branching conversations, enabling users to explore alternative responses without losing conversation history
 - **Multi-Backend Support**: Allows seamless switching between different message processing backends mid-conversation, enabling hybrid approaches like starting with AI and escalating to human support
+- **Plugin Extensibility**: Predefined domain model schemas (message types, content types, event types, error types) are designed as base schemas that plugin vendors can extend via GTS, enabling custom scenarios — custom content rendering, domain-specific events, vendor error taxonomies — without modifying Chat Engine core
 
 **Success Criteria**:
 - Message routing latency < 100ms (p95) excluding backend processing time
@@ -38,6 +39,7 @@ The system supports various conversation patterns including traditional linear c
 - Session sharing via links with read-only and branching access
 - Message search within sessions and across sessions
 - Message tree navigation and variant selection
+- Extensible domain model schemas — plugin vendors can define custom message types, content types, event types, and error types on top of the predefined base schemas, enabling custom scenarios without forking Chat Engine core (see FR-021)
 
 ### Glossary
 
