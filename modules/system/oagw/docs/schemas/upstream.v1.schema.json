@@ -32,6 +32,7 @@
       "properties": {
         "endpoints": {
           "type": "array",
+          "minItems": 1,
           "items": {
             "type": "object",
             "properties": {
@@ -42,7 +43,11 @@
               },
               "host": {
                 "type": "string",
-                "format": "hostname",
+                "anyOf": [
+                  { "format": "hostname" },
+                  { "format": "ipv4" },
+                  { "format": "ipv6" }
+                ],
                 "description": "Hostname or IP address of the upstream service."
               },
               "port": {
@@ -56,7 +61,9 @@
             "required": [ "scheme", "host" ]
           }
         }
-      }
+      },
+      "additionalProperties": false,
+      "required": [ "endpoints" ]
     },
     "protocol": {
       "type": "string",
@@ -126,8 +133,13 @@
     "rate_limit": {
       "$ref": "#/definitions/rate_limit",
       "description": "Rate limiting configuration for the upstream."
+    },
+    "cors": {
+      "$ref": "#/definitions/cors",
+      "description": "CORS configuration for the upstream."
     }
   },
+  "additionalProperties": false,
   "required": [ "server", "protocol" ],
   "definitions": {
     "headers": {
@@ -270,7 +282,13 @@
         },
         "allowed_origins": {
           "type": "array",
-          "items": { "type": "string", "format": "uri" },
+          "items": {
+            "type": "string",
+            "oneOf": [
+              { "const": "*" },
+              { "format": "uri" }
+            ]
+          },
           "description": "Allowed origins. Use ['*'] for any origin (not recommended with credentials)."
         },
         "allowed_methods": {
@@ -304,7 +322,20 @@
           "description": "Allow credentials (cookies, auth headers). Requires specific origins (not '*')."
         }
       },
-      "required": [ "enabled" ]
+      "required": [ "enabled" ],
+      "if": {
+        "properties": {
+          "allow_credentials": { "const": true }
+        },
+        "required": [ "allow_credentials" ]
+      },
+      "then": {
+        "not": {
+          "properties": {
+            "allowed_origins": { "contains": { "const": "*" } }
+          }
+        }
+      }
     }
   }
 }

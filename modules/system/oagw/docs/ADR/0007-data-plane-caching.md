@@ -36,7 +36,7 @@ Chosen option: "Multi-layer caching: L1 (in-memory) + optional L2 (Redis) + Data
 |---|---|---|---|---|---|
 | L1 (In-Memory) | Per-instance LRU | 10,000 entries | No TTL (LRU eviction) | <1μs | |
 | L2 (Redis, optional) | Shared across instances | Unbounded | 5 minutes | ~1-2ms | MessagePack serialization |
-| Database (PostgreSQL) | Source of truth (JSONB) | Unlimited | N/A | ~5-10ms | Queried only on L1+L2 miss |
+| Database (PostgreSQL) | Source of truth (JSON text) | Unlimited | N/A | ~5-10ms | Queried only on L1+L2 miss |
 
 ### Lookup Flow
 
@@ -73,7 +73,7 @@ Caches are lazily populated on read (no proactive warming).
 ### Cache Keys
 
 - `upstream:{tenant_id}:{alias}` → UpstreamConfig
-- `route:{upstream_id}:{method}:{path}` → RouteConfig
+- `route:{upstream_id}:{method}:{path_prefix}` → RouteConfig
 - `plugin:{plugin_id}` → Plugin definition
 
 ### Cache Invalidation

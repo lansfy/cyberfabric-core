@@ -182,17 +182,17 @@ Enables partner/customer hierarchies where partners share upstream access with c
 
 **Steps**:
 1. [ ] - `p2` - Initialize effective config from root ancestor's upstream (if shared) — absent fields default to null/unset - `inst-merge-1`
-2. [ ] - `p2` - **FOR EACH** ancestor in chain from root to selected tenant (inclusive) - `inst-merge-2`
-   1. [ ] - `p2` - **IF** ancestor has upstream with matching alias and `sharing != private` - `inst-merge-2a`
-      1. [ ] - `p2` - Merge auth: **IF** field is absent on current level, inherit from previous level; **IF** `sharing: inherit` and descendant has override, use descendant auth; **IF** `sharing: enforce`, use ancestor auth - `inst-merge-2a1`
-      2. [ ] - `p2` - Merge rate_limit: **IF** field is absent, inherit from previous level (no limit = unbounded); **IF** present, `effective = min(ancestor_enforced, current_effective)` — stricter always wins - `inst-merge-2a2`
-      3. [ ] - `p2` - Merge plugins: **IF** field is absent, inherit ancestor plugins; **IF** present, concatenate `ancestor.plugins + descendant.plugins`; enforced plugins cannot be removed - `inst-merge-2a3`
-      4. [ ] - `p2` - Merge tags: `effective_tags = union(ancestor_tags, descendant_tags)` — add-only semantics; absent tags treated as empty set - `inst-merge-2a4`
-      5. [ ] - `p2` - Merge CORS: **IF** field is absent, inherit from previous level; **IF** `sharing: inherit`, union origins; **IF** `sharing: enforce`, use ancestor CORS - `inst-merge-2a5`
-3. [ ] - `p2` - Apply route-level overrides per `cpt-cf-oagw-fr-config-layering` priority (upstream base < route < tenant): **IF** matched route has field-level config, overlay onto effective upstream config — route config takes priority over upstream base but tenant hierarchy enforced constraints still apply - `inst-merge-3`
+2. [ ] - `p2` - Apply route-level overrides: **IF** matched route has field-level config, overlay onto effective upstream base — route config takes priority over upstream base per `cpt-cf-oagw-fr-config-layering` (upstream base < route < tenant); route-level sharing follows the same `private`/`inherit`/`enforce` semantics as upstream-level sharing - `inst-merge-2`
+3. [ ] - `p2` - **FOR EACH** ancestor in chain from root to selected tenant (inclusive) - `inst-merge-3`
+   1. [ ] - `p2` - **IF** ancestor has upstream with matching alias - `inst-merge-3a`
+      1. [ ] - `p2` - Merge auth: **IF** `auth_sharing == private`, skip; **IF** field is absent on current level, inherit from previous level; **IF** `auth_sharing: inherit` and descendant has override, use descendant auth; **IF** `auth_sharing: enforce`, use ancestor auth - `inst-merge-3a1`
+      2. [ ] - `p2` - Merge rate_limit: **IF** `rate_limit_sharing == private`, skip; **IF** field is absent, inherit from previous level (no limit = unbounded); **IF** present, `effective = min(ancestor_enforced, current_effective)` — stricter always wins - `inst-merge-3a2`
+      3. [ ] - `p2` - Merge plugins: **IF** `plugins_sharing == private`, skip; **IF** field is absent, inherit ancestor plugins; **IF** present, concatenate `ancestor.plugins + descendant.plugins`; enforced plugins cannot be removed - `inst-merge-3a3`
+      4. [ ] - `p2` - Merge tags: **IF** `tags_sharing == private`, skip; `effective_tags = union(ancestor_tags, descendant_tags)` — add-only semantics; absent tags treated as empty set - `inst-merge-3a4`
+      5. [ ] - `p2` - Merge CORS: **IF** `cors_sharing == private`, skip; **IF** field is absent, inherit from previous level; **IF** `cors_sharing: inherit`, union origins; **IF** `cors_sharing: enforce`, use ancestor CORS - `inst-merge-3a5`
 4. [ ] - `p2` - **RETURN** effective configuration with all three layers merged - `inst-merge-4`
 
-> **Layering note**: Per `cpt-cf-oagw-fr-config-layering`, the merge priority is: Upstream (base) < Route < Tenant (highest priority). Steps 1–2 resolve the tenant hierarchy dimension. Step 3 applies the route-level dimension. Route-level sharing follows the same `private`/`inherit`/`enforce` semantics as upstream-level sharing.
+> **Layering note**: Per `cpt-cf-oagw-fr-config-layering`, the merge priority is: Upstream (base) < Route < Tenant (highest priority). Step 1 initializes the upstream base. Step 2 applies route-level overrides (route > upstream). Step 3 applies tenant hierarchy overrides last (tenant > route), ensuring tenant `enforce` constraints are never bypassed. Route-level sharing follows the same `private`/`inherit`/`enforce` semantics as upstream-level sharing.
 
 ### Alias Shadowing Resolution
 
@@ -206,7 +206,7 @@ Enables partner/customer hierarchies where partners share upstream access with c
 1. [ ] - `p2` - Obtain ancestor chain for requesting tenant (ordered: self → parent → ... → root) - `inst-shadow-1`
 2. [ ] - `p2` - **FOR EACH** tenant_id in chain (self first) - `inst-shadow-2`
    1. [ ] - `p2` - DB: SELECT from oagw_upstream WHERE tenant_id = :current AND alias = :alias - `inst-shadow-2a`
-   2. [ ] - `p2` - **IF** upstream found AND (upstream.sharing != `private` OR tenant_id == requesting_tenant) - `inst-shadow-2b`
+   2. [ ] - `p2` - **IF** upstream found AND (tenant_id == requesting_tenant OR any per-field sharing flag — `auth.sharing`, `rate_limit.sharing`, `plugins.sharing`, `tags.sharing`, `cors.sharing` — is != `private`) - `inst-shadow-2b`
       1. [ ] - `p2` - **IF** upstream is enabled - `inst-shadow-2b1`
          1. [ ] - `p2` - **RETURN** found upstream as selected match - `inst-shadow-2b1a`
       2. [ ] - `p2` - **ELSE** (upstream disabled) - `inst-shadow-2b2`

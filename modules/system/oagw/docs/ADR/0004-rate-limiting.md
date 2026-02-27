@@ -91,7 +91,7 @@ OAGW needs a rate limiting strategy that addresses three concerns: (1) algorithm
 
 Each level sets own limit. No coordination.
 
-```
+```text
 System: 10,000/min (global cap)
 Partner A: 5,000/min (own limit)
   Tenant A1: 1,000/min
@@ -102,7 +102,7 @@ Partner A: 5,000/min (own limit)
 
 Parent allocates budget to children. Children cannot exceed allocation.
 
-```
+```text
 System: 10,000/min (total capacity)
 ├── Partner A: 5,000/min (allocated by system)
 │   ├── Tenant A1: 2,000/min (allocated by partner)
@@ -141,7 +141,7 @@ Each node tracks own counters. Effective limit = `configured_limit / node_count`
 
 **Option B: Centralized Store (Redis)**
 
-```
+```text
 Node 1 ──┐
 Node 2 ──┼── Redis (atomic INCR + EXPIRE)
 Node 3 ──┘
@@ -151,7 +151,7 @@ Node 3 ──┘
 
 Local token bucket with periodic sync to central store.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │  OAGW Node                                              │
 │  ┌─────────────────┐    ┌─────────────────────────────┐ │
@@ -189,7 +189,7 @@ Local token bucket with periodic sync to central store.
 
 Central service allocates quota to nodes. Nodes request more when depleted.
 
-```
+```text
 Node 1: "Give me quota for tenant X"
 Quota Service: "Here's 100 tokens, valid for 10s"
 Node 1: Uses tokens locally, requests more when low
@@ -282,7 +282,7 @@ Parent allocates budget to children. Effective limit = `min(own_limit, parent_ef
 
 **Budget validation on child creation**:
 
-```
+```text
 Parent budget: 5000/min
 Existing children: A (2000), B (1000)
 New child C requests: 3000
@@ -298,7 +298,7 @@ If overcommit_ratio = 1.5:
 
 MVP: Per-instance rate limiting in Data Plane (no distributed coordination). Future: Redis-backed distributed rate limiting with configurable sync interval (default 100ms).
 
-Rate limiting executes in **Data Plane (CP)**. Configuration is resolved from Control Plane (DP) caches during upstream/route resolution.
+Rate limiting executes in **Data Plane (DP)**. Configuration is resolved from Control Plane (CP) caches during upstream/route resolution.
 
 **Configuration**:
 
@@ -321,10 +321,13 @@ Rate limiting executes in **Data Plane (CP)**. Configuration is resolved from Co
 
 **Redis key structure**:
 
-```
+```text
 oagw:ratelimit:{scope}:{identifier}:{window} = {count}
-oagw:ratelimit:tenant:uuid-123:minute:2026013015 = 4523
+oagw:ratelimit:tenant:uuid-123:minute:202601301530 = 4523
 ```
+
+> **Note:** Minute-bucket keys must use **YYYYMMDDHHMM** (12 digits) to avoid
+> confusion with hour-level granularity and prevent incorrect aggregation.
 
 ### Consequences
 
@@ -614,7 +617,7 @@ async fn sync_with_redis(local: &mut TokenBucket, key: &str, redis: &Redis) {
 ## More Information
 
 Response headers follow RFC 6585 / draft-ietf-httpapi-ratelimit-headers:
-```
+```http
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 0
 X-RateLimit-Reset: 1706626800

@@ -204,7 +204,7 @@ classDiagram
 **Key Domain Entities**:
 
 - **Upstream** (`gts.x.core.oagw.upstream.v1~`): Tenant-scoped root configuration object representing an external service. Unique per `(tenant_id, alias)`. Contains server endpoints, auth config, rate limits, CORS, headers, and plugin bindings.
-- **Route** (`gts.x.core.oagw.route.v1~`): Belongs to an upstream. Defines match rules (HTTP path/method or gRPC service/method), priority, and route-level overrides for rate limits, CORS, and plugins.
+- **Route** (`gts.x.core.oagw.route.v1~`): Belongs to an upstream. Defines match rules (HTTP path/method; gRPC service/method matching is planned for Phase 3 — no gRPC proxy code path is currently implemented or reachable), priority, and route-level overrides for rate limits, CORS, and plugins.
 - **Plugin** (`gts.x.core.oagw.{type}_plugin.v1~`): Custom tenant-defined Starlark plugins stored in `oagw_plugin`. Named (built-in) plugins are resolved via in-process registry and not persisted.
 
 #### Upstream Schema
@@ -227,7 +227,7 @@ Full schema: [schemas/route.v1.schema.json](./schemas/route.v1.schema.json)
 
 One per upstream. Named auth plugins resolved via in-process registries, not stored in `oagw_plugin`. UUID-backed auth plugins stored in `oagw_plugin`.
 
-Builtin auth plugins:
+Built-in auth plugins:
 - `gts.x.core.oagw.auth_plugin.v1~x.core.oagw.noop.v1`
 - `gts.x.core.oagw.auth_plugin.v1~x.core.oagw.apikey.v1`
 - `gts.x.core.oagw.auth_plugin.v1~x.core.oagw.basic.v1`
@@ -292,7 +292,7 @@ The database stores:
 
 #### Module Structure
 
-```
+```text
 modules/system/oagw/
 ├── oagw-sdk/              # Public API: ServiceGatewayClientV1 trait, models, errors
 │   └── src/
@@ -603,7 +603,7 @@ List endpoints support OData query parameters: `$filter`, `$select`, `$orderby`,
 
 Request classification uses `upstream.protocol` to determine match strategy:
 - HTTP: method allowlist + longest path prefix match
-- gRPC: `(service, method)` match from gRPC request path
+- gRPC (planned/Phase 3): `(service, method)` match from gRPC request path (no gRPC proxy code path is currently implemented or reachable)
 
 #### Error Response Format
 
@@ -717,7 +717,7 @@ sequenceDiagram
 
 #### Management Operation Flow
 
-```
+```text
 Client → API Handler (auth, validate DTO) → ControlPlaneService (validate, write DB) → Response
 ```
 
@@ -763,7 +763,7 @@ See [ADR: Resource Identification](./ADR/0010-resource-identification.md) for th
 |---|---|
 | Find Upstream by Alias | Lookup by `(tenant_id, alias)` with tenant hierarchy walk and `enabled` inheritance |
 | List Upstreams for Tenant | List with shadowing (closest tenant wins) and `enabled` inheritance |
-| Find Matching Route for Request | Match by `(upstream_id, method, longest path prefix, priority)` for HTTP; `(upstream_id, service, method)` for gRPC |
+| Find Matching Route for Request | Match by `(upstream_id, method, longest path prefix, priority)` for HTTP; `(upstream_id, service, method)` for gRPC (planned/Phase 3 — no gRPC proxy code path is currently implemented or reachable) |
 | Resolve Effective Configuration | Walk hierarchy, collect bindings, merge from root to child per sharing modes |
 | List Routes by Upstream | Filter by `upstream_id` with tenant scoping |
 | Track Plugin Usage | Scan `oagw_upstream_plugin`, `oagw_route_plugin`, and `auth_plugin_uuid` columns for references |

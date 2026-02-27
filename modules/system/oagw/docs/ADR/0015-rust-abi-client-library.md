@@ -19,7 +19,7 @@ Internal CyberFabric modules (workflow engines, agents, background jobs) need to
 - No streaming-aware API design
 - No SDK integration strategy
 
-**Scope**: This ADR covers HTTP/HTTPS/WS/SSE/WT protocols. gRPC is future work.
+**Scope**: This ADR covers HTTP/HTTPS/WS/SSE protocols. WebTransport (WT) and gRPC are future work (Phase 3).
 
 ## Decision Drivers
 
@@ -70,7 +70,7 @@ impl OagwClient {
 - **Phase 0 (MVP)**: Pattern 4 (Wrapper Layer) for OpenAI + Pattern 1 (Drop-In Replacement) for internal modules + Blocking API
 - **Phase 1**: Pattern 2 (HTTP Proxy) for unmodified third-party SDKs
 - **Phase 2**: Pattern 3 (Custom Transport Trait) as standardized pattern for new SDKs
-- **Phase 3**: WebTransport (future)
+- **Phase 3**: WebTransport & gRPC (future)
 
 ### Build Script Strategy
 
@@ -279,6 +279,11 @@ Extend `reqwest::Client` with middleware that intercepts requests and routes thr
 - Adds complexity (proxy server + host mapping)
 
 **Phase 2**: Pattern 3 (Custom Transport Trait) as standardized pattern for new SDKs
+
+**Phase 3**: WebTransport & gRPC (future)
+
+- Protocol support for WebTransport and gRPC
+- Extends client library beyond HTTP-based patterns
 
 ## HTTP Client Compatibility Analysis
 
@@ -835,18 +840,48 @@ impl OagwClientConfig {
                     default_timeout: Duration::from_secs(30),
                 })
             }
-            Ok("remote") | Ok(_) | Err(_) => {
+            Ok("remote") | Err(_) => {
                 let base_url = std::env::var("OAGW_BASE_URL")
                     .unwrap_or_else(|_| "https://oagw.internal.cf".to_string());
-                let auth_token = std::env::var("OAGW_AUTH_TOKEN")?;
+                let auth_token = std::env::var("OAGW_AUTH_TOKEN")
+                    .map_err(|e| ClientError::BuildError(format!("OAGW_AUTH_TOKEN not set: {e}")))?;
+                let default_timeout = Duration::from_secs(30);
                 Ok(Self {
                     mode: ClientMode::RemoteProxy {
-                        base_url, auth_token, timeout: Duration::from_secs(30),
+                        base_url, auth_token, timeout: default_timeout,
                     },
-                    default_timeout: Duration::from_secs(30),
+                    default_timeout,
                 })
             }
+            Ok(other) => Err(ClientError::BuildError(format!(
+                "unknown OAGW_MODE '{other}': allowed values are \"shared\", \"remote\"",
+            ))),
         }
+    }
+}
+```
+
+##### Metrics RAII Guard
+
+Both client implementations use an RAII guard to ensure `requests_in_flight` is always decremented and `request_duration` is always observed, even on early error returns:
+
+```rust
+struct InFlightGuard<'a> {
+    metrics: &'a Metrics,
+    start: Instant,
+}
+
+impl<'a> InFlightGuard<'a> {
+    fn new(metrics: &'a Metrics) -> Self {
+        metrics.requests_in_flight.inc();
+        Self { metrics, start: Instant::now() }
+    }
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics.requests_in_flight.dec();
+        self.metrics.request_duration.observe(self.start.elapsed().as_secs_f64());
     }
 }
 ```
@@ -867,8 +902,7 @@ impl SharedProcessClient {
     }
 
     async fn execute(&self, alias: &str, request: Request) -> Result<Response, ClientError> {
-        let start = Instant::now();
-        self.metrics.requests_in_flight.inc();
+        let _guard = InFlightGuard::new(&self.metrics);
 
         let proxy_request = ProxyRequest {
             alias: alias.to_string(),
@@ -880,9 +914,6 @@ impl SharedProcessClient {
 
         let proxy_response = self.control_plane.proxy_request(proxy_request).await
             .map_err(|e| ClientError::Connection(e.to_string()))?;
-
-        self.metrics.requests_in_flight.dec();
-        self.metrics.request_duration.observe(start.elapsed().as_secs_f64());
 
         let error_source = proxy_response.headers
             .get("x-oagw-error-source")
@@ -944,8 +975,7 @@ impl RemoteProxyClient {
     }
 
     async fn execute(&self, alias: &str, request: Request) -> Result<Response, ClientError> {
-        let start = Instant::now();
-        self.metrics.requests_in_flight.inc();
+        let _guard = InFlightGuard::new(&self.metrics);
 
         // Build URL: https://oagw.internal.cf/api/oagw/v1/proxy/{alias}{path}
         let url = format!("{}/api/oagw/v1/proxy/{}{}",
@@ -985,9 +1015,6 @@ impl RemoteProxyClient {
 
         let stream = resp.bytes_stream()
             .map_err(|e| ClientError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)));
-
-        self.metrics.requests_in_flight.dec();
-        self.metrics.request_duration.observe(start.elapsed().as_secs_f64());
 
         Ok(Response {
             status, headers,
@@ -1068,7 +1095,7 @@ impl RemoteProxyClient {
 
 ### Out of Scope: OAGW Plugin Development
 
-Plugin development APIs (PluginContext, Starlark integration) are **not part of this client library**. They belong in OAGW's plugin system (see [ADR: Plugin System](../adr-plugin-system.md)).
+Plugin development APIs (PluginContext, Starlark integration) are **not part of this client library**. They belong in OAGW's plugin system (see [ADR: Plugin System](./0003-plugin-system.md)).
 
 This client library is solely for **internal modules** to make HTTP requests **through** OAGW, not for developing plugins that **run inside** OAGW.
 
@@ -1138,23 +1165,19 @@ pub struct WebTransportStream {
 
 **Deliverable**: WebSocket connections work through OAGW
 
-### Phase 3: SDK Integration - HTTP Proxy Pattern
+### Phase 3: SDK HTTP Proxy, WebTransport & gRPC
 
 - Implement Pattern 2 (HTTP Proxy)
 - Local proxy server on `localhost:8080`
 - Host-to-alias mapping configuration
 - Transparent support for unmodified third-party SDKs
+- QUIC transport layer (future)
+- `WebTransportConn` implementation (future)
+- Stream multiplexing (future)
+- Datagram support (future)
+- gRPC transport support via tonic (future)
 
-**Deliverable**: Any Rust SDK can use OAGW via `HTTP_PROXY` env var
-
-### Phase 4: WebTransport (Future)
-
-- QUIC transport layer
-- `WebTransportConn` implementation
-- Stream multiplexing
-- Datagram support
-
-**Deliverable**: WebTransport protocol support
+**Deliverable**: Any Rust SDK can use OAGW via `HTTP_PROXY` env var; WebTransport and gRPC protocol support (future)
 
 ## Testing Strategy
 
@@ -1267,7 +1290,7 @@ mod tests {
 
         let response = client.execute("invalid-alias", request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(response.error_source, ErrorSource::Gateway);
+        assert_eq!(response.error_source(), ErrorSource::Gateway);
     }
 
     #[tokio::test]
@@ -1290,7 +1313,7 @@ mod tests {
         };
         let remote_client = OagwClient::from_config(remote_config).unwrap();
 
-        let request = Request::builder()
+        let request1 = Request::builder()
             .method(Method::POST)
             .path("/v1/chat/completions")
             .json(&json!({"model": "gpt-4", "messages": []}))
@@ -1298,8 +1321,16 @@ mod tests {
             .build()
             .unwrap();
 
-        let response1 = shared_client.execute("openai", request.clone()).await;
-        let response2 = remote_client.execute("openai", request).await;
+        let request2 = Request::builder()
+            .method(Method::POST)
+            .path("/v1/chat/completions")
+            .json(&json!({"model": "gpt-4", "messages": []}))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let response1 = shared_client.execute("openai", request1).await;
+        let response2 = remote_client.execute("openai", request2).await;
         assert!(response1.is_ok() || response2.is_ok());
     }
 }
@@ -1314,7 +1345,7 @@ enum OagwClientImpl {
     SharedProcess(SharedProcessClient),
     RemoteProxy(RemoteProxyClient),
     #[cfg(test)]
-    Mock(MockClient),
+    Mock(Arc<MockClient>),
 }
 
 #[cfg(test)]
@@ -1371,7 +1402,7 @@ async fn test_with_mock() {
     mock.push_response("openai", Response {
         status: StatusCode::OK,
         headers: HeaderMap::new(),
-        body: Bytes::from(r#"{"choices": []}"#),
+        body: ResponseBody::Buffered(Bytes::from(r#"{"choices": []}"#)),
         error_source: ErrorSource::Upstream,
         extensions: Extensions::default(),
     });
@@ -1487,14 +1518,14 @@ ureq = "2.12"  # Test sync client compatibility
 * Good, because simpler API surface
 * Bad, because cannot support multiple backends, harder to test, less flexible for future extensions
 
-**Decision**: Use trait-based abstraction.
+**Decision**: Use hybrid approach with enum-based deployment abstraction.
 
 ## Related ADRs
 
-- [ADR: Component Architecture](../adr-component-architecture.md) - OAGW deployment modes (shared-process vs microservice)
-- [ADR: Error Source Distinction](../adr-error-source-distinction.md) - `X-OAGW-Error-Source` header for gateway vs upstream errors
-- [ADR: Plugin System](../adr-plugin-system.md) - OAGW plugin development (separate from this client library)
-- [ADR: Request Routing](../adr-request-routing.md) - How OAGW routes requests to upstreams
+- [ADR: Component Architecture](./0001-component-architecture.md) - OAGW deployment modes (shared-process vs microservice)
+- [ADR: Error Source Distinction](./0013-error-source-distinction.md) - `X-OAGW-Error-Source` header for gateway vs upstream errors
+- [ADR: Plugin System](./0003-plugin-system.md) - OAGW plugin development (separate from this client library)
+- [ADR: Request Routing](./0002-request-routing.md) - How OAGW routes requests to upstreams
 
 ## References
 

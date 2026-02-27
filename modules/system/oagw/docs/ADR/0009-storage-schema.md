@@ -21,7 +21,7 @@ OAGW persists configuration for upstreams, routes, and plugins. This data is rea
   * Match HTTP routes by `(upstream_id, method, longest path prefix, priority)`
   * Match gRPC routes by `(upstream_id, service, method, priority)`
 * Deletion semantics: deleting an upstream must delete its routes and dependent match/binding rows
-* Plugin requirements: ordered plugin chains with per-binding config; plugin references must support both builtin named IDs and custom UUID-backed IDs; custom plugin lifecycle requires "in use" detection and GC eligibility timestamps
+* Plugin requirements: ordered plugin chains with per-binding config; plugin references must support both built-in named IDs and custom UUID-backed IDs; custom plugin lifecycle requires "in use" detection and GC eligibility timestamps
 * Portability: avoid correctness depending on backend-specific features (e.g. JSON operators, partial indexes)
 
 ## Considered Options
@@ -41,7 +41,7 @@ Chosen option: "Portable relational baseline + JSON blobs", because it keeps hot
 - `oagw_route_http_match` / `oagw_route_grpc_match`: typed match keys for deterministic route selection
 - `oagw_route_method`: HTTP method allowlists
 - `oagw_upstream_tag` / `oagw_route_tag`: discovery tags
-- `oagw_plugin`: custom (UUID-backed) plugins only; builtin plugins are not persisted
+- `oagw_plugin`: custom (UUID-backed) plugins only; built-in plugins are not persisted
 - `oagw_upstream_plugin` / `oagw_route_plugin`: ordered plugin bindings with per-binding config
 
 ### Non-Negotiable Invariants
@@ -53,7 +53,7 @@ Chosen option: "Portable relational baseline + JSON blobs", because it keeps hot
 - Multi-value associations that affect selection/filtering (methods, tags, plugin bindings) are stored in join tables
 - Plugin bindings preserve explicit ordering and per-binding config (`position` unique per parent, contiguous from 0)
 - Plugin identifiers in bindings support:
-  - builtin named IDs (resolved from the built-in registry)
+  - built-in named IDs (resolved from the built-in registry)
   - custom plugins (resolved by UUID in `oagw_plugin`)
 - Named plugins are not persisted as rows:
   - `oagw_plugin` stores custom (UUID-backed) plugins only
@@ -87,7 +87,7 @@ Chosen option: "Portable relational baseline + JSON blobs", because it keeps hot
   - `plugin_ref` must represent the same UUID (exact format is an application concern; comparisons must be done on the parsed UUID).
   - The referenced row must exist in `oagw_plugin` within scope.
 - If `plugin_uuid` is NULL on a binding row:
-  - `plugin_ref` must resolve to a builtin plugin in the registry.
+  - `plugin_ref` must resolve to a built-in plugin in the registry.
 - `auth_plugin_ref/auth_plugin_uuid` (when present) must resolve to an **auth** plugin.
 - `oagw_upstream_plugin` / `oagw_route_plugin` bindings must not reference auth plugins (auth is configured only via `auth_plugin_*`).
 - Binding ordering:
@@ -107,8 +107,8 @@ To preserve deterministic selection semantics across backends and timestamp prec
 
 * Good, because portable schema across PostgreSQL/MySQL/SQLite
 * Good, because efficient selection for proxy hot-path scenarios
-* Good, because supports builtin named IDs, custom UUID plugins, delete-in-use detection, and GC eligibility
-* Bad, because some referential integrity enforced in application code (builtin plugins not FK-backed)
+* Good, because supports built-in named IDs, custom UUID plugins, delete-in-use detection, and GC eligibility
+* Bad, because some referential integrity enforced in application code (built-in plugins not FK-backed)
 * Bad, because requires application-level validation for `plugin_ref` well-formedness
 
 ### Confirmation
@@ -141,7 +141,7 @@ Migration tests verify: schema creates successfully on all supported backends (P
 
 - Keeping hot-path selectors in scalar columns / join tables enables efficient, portable queries.
 - Separating route match keys into typed tables enables deterministic route selection without parsing JSON.
-- Storing plugin references as canonical strings (`plugin_ref`) supports builtin named IDs while still allowing efficient lookups for custom plugins via `plugin_uuid`.
+- Storing plugin references as canonical strings (`plugin_ref`) supports built-in named IDs while still allowing efficient lookups for custom plugins via `plugin_uuid`.
 - Storing `auth_plugin_ref/auth_plugin_uuid` as scalar columns avoids correctness and "in use" checks depending on backend-specific JSON querying.
 
 ## Appendix A: Schema Tables (Illustrative)
@@ -163,9 +163,9 @@ Notes:
 | `alias` | TEXT | No | Unique per tenant |
 | `protocol` | TEXT | No | GTS protocol identifier |
 | `enabled` | BOOL | No | |
-| `auth_sharing` | TEXT | No | `private|inherit|enforce` |
-| `rate_limit_sharing` | TEXT | No | `private|inherit|enforce` |
-| `plugins_sharing` | TEXT | No | `private|inherit|enforce` |
+| `auth_sharing` | TEXT | No | `private\|inherit\|enforce` |
+| `rate_limit_sharing` | TEXT | No | `private\|inherit\|enforce` |
+| `plugins_sharing` | TEXT | No | `private\|inherit\|enforce` |
 | `schema_version` | INT | No | JSON schema version for JSON text columns in this table |
 | `server` | JSON text | No | Endpoints + protocol config |
 | `auth_plugin_ref` | TEXT | Yes | Canonical plugin identifier |
@@ -208,8 +208,8 @@ Indexes:
 | `match_config` | JSON text | Yes | Query allowlist, suffix mode, etc. |
 | `cors` | JSON text | Yes | |
 | `rate_limit` | JSON text | Yes | |
-| `rate_limit_sharing` | TEXT | No | `private|inherit|enforce` |
-| `plugins_sharing` | TEXT | No | `private|inherit|enforce` |
+| `rate_limit_sharing` | TEXT | No | `private\|inherit\|enforce` |
+| `plugins_sharing` | TEXT | No | `private\|inherit\|enforce` |
 | `created_at` | TIMESTAMP | No | |
 | `updated_at` | TIMESTAMP | No | |
 

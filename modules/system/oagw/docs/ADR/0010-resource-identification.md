@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-01-28
-decision-makers: TBD
+decision-makers: OAGW Team
 ---
 
 # Resource Identification — UUID + Alias + Tags + Tenant Bindings
@@ -45,7 +45,7 @@ Links tenant to upstream definition. Holds tenant-specific auth config, rate lim
 
 Request ID for tracing. References both binding ID and upstream ID in access logs.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    Upstream Definition                       │
 │  id: "01234567-..."  (UUID)                                 │
@@ -75,7 +75,7 @@ Request ID for tracing. References both binding ID and upstream ID in access log
 
 **Algorithm for Common Suffix Extraction**:
 
-```
+```text
 Given endpoints: ["us.vendor.com", "eu.vendor.com", "ap.vendor.com"]
 
 1. Split each hostname by dots: [["us", "vendor", "com"], ["eu", "vendor", "com"], ["ap", "vendor", "com"]]
@@ -157,7 +157,7 @@ Given endpoints: ["us.vendor.com", "eu.vendor.com", "ap.vendor.com"]
 
 **Multi-endpoint with shared alias** (load balancing pool):
 
-```
+```text
 Root Tenant:
 ┌────────────────────────────┐  ┌────────────────────────────┐
 │  Upstream A                │  │  Upstream B                │
@@ -181,7 +181,7 @@ When resolving an alias, OAGW searches the tenant hierarchy from descendant to r
 
 **Alias Resolution Order** (closest to tenant wins):
 
-```
+```text
 Request from: subsub-tenant
 Alias: "api.openai.com"
 
@@ -193,7 +193,7 @@ Resolution order:
 
 **Shadowing example**:
 
-```
+```text
 Root Tenant:
 ┌────────────────────────────────────────┐
 │  Upstream A                            │
@@ -234,11 +234,11 @@ When sub-tenant requests `/proxy/api.openai.com/...`:
 
 ### Alias Compatibility Validation
 
-Upstreams pooled under same alias must have identical `protocol`, `scheme`, and `port`. Incompatible configurations are rejected with `ALIAS_INCOMPATIBLE` error.
+Upstreams pooled under the same alias **within the same tenant** must have identical `protocol`, `scheme`, and `port`. Incompatible configurations are rejected with `ALIAS_INCOMPATIBLE` error. This rule does **not** apply across tenant hierarchy boundaries: when a child tenant shadows a parent's alias (as in the shadowing example above, where the child uses port 8443 while the parent uses 443), the child's upstream fully replaces the parent's during resolution — no pooling occurs, so no compatibility check is needed.
 
 **Limit enforcement across shadowing**:
 
-```
+```text
 Root Tenant:
 ┌────────────────────────────────────────┐
 │  Upstream A                            │
@@ -263,7 +263,7 @@ Sub Tenant:
 
 **When shadowing doesn't inherit enforcement** - different alias:
 
-```
+```text
 Root: alias "openai-shared", rate_limit: { sharing: "enforce", rate: 10000 }
 Sub:  alias "openai-private" (different alias - no enforcement inheritance)
 ```
@@ -272,7 +272,7 @@ Sub:  alias "openai-private" (different alias - no enforcement inheritance)
 
 When multiple upstreams share the same alias **within same tenant or explicitly configured for pooling**, they form a load-balance pool:
 
-```
+```text
 Root Tenant:
 ┌────────────────────────────┐  ┌────────────────────────────┐
 │  Upstream A                │  │  Upstream B                │
@@ -292,7 +292,7 @@ Root Tenant:
 
 **Resolution flow**:
 
-```
+```text
 Request: POST /api/oagw/v1/proxy/api.openai.com/v1/chat/completions
 Tenant: sub-tenant
 
@@ -440,13 +440,13 @@ GET /api/oagw/v1/upstreams?host=api.openai.com
 
 ### Proxy URL
 
-```
+```text
 POST /api/oagw/v1/proxy/{alias}/{path_suffix}
 ```
 
 **Examples**:
 
-```
+```text
 # Hostname as alias (default)
 POST /api/oagw/v1/proxy/api.openai.com/v1/chat/completions
 
@@ -459,7 +459,7 @@ POST /api/oagw/v1/proxy/my-service/health
 
 **Resolution flow**:
 
-```
+```text
 Inbound: POST /api/oagw/v1/proxy/my-service/api/v1/users
                                  └───┬────┘└─────┬─────┘
                                   alias      path_suffix
@@ -476,7 +476,7 @@ Inbound: POST /api/oagw/v1/proxy/my-service/api/v1/users
 
 **Access log**:
 
-```
+```text
 timestamp=2026-01-28T17:30:00Z
 request_id=req-uuid
 tenant_id=tenant-a
@@ -545,7 +545,7 @@ Access log fields: `request_id`, `tenant_id`, `binding_id`, `upstream_id`, `upst
 
 **Scenario**: Partner tenant creates upstream for `api.openai.com` with rate limits and shared auth. Customer tenant wants to use the same upstream with minimal configuration.
 
-```
+```text
 Partner Tenant (parent):
 ┌─────────────────────────────────────────────────────────────┐
 │  Upstream: api.openai.com                                   │
@@ -607,7 +607,7 @@ This means:
 
 **Example**: Partner shares OpenAI key with customers
 
-```
+```text
 Partner Tenant:
   - Creates secret "openai-api-key" in cred_store
   - Sets sharing policy: { visibility: "inherit" }
@@ -725,7 +725,7 @@ X-Tenant-ID: partner-uuid
   },
   "plugins": {
     "sharing": "inherit",
-    "items": ["gts.x.core.oagw.filter_plugin.v1~x.core.oagw.logging.v1"]
+    "items": ["gts.x.core.oagw.transform_plugin.v1~x.core.oagw.logging.v1"]
   }
 }
 ```

@@ -42,13 +42,13 @@ Chosen option: "Path-based routing", because it provides the shortest path for e
 
 **Management Operations** (e.g., `POST /upstreams`):
 
-```
+```text
 Client → API Handler (auth, rate limit) → Control Plane (validate, write DB, invalidate cache) → Response
 ```
 
 **Proxy Operations** (e.g., `GET /proxy/openai/v1/chat/completions`):
 
-```
+```text
 Client → API Handler (auth, rate limit) → Data Plane (orchestrate)
   → Control Plane (resolve upstream config)
   → Control Plane (resolve route config)

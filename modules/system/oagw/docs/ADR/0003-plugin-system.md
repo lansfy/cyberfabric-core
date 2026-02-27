@@ -71,7 +71,7 @@ pub trait TransformPlugin: Send + Sync {
 
 ### Execution Order
 
-```
+```text
 Incoming Request
   → Auth Plugin (credential injection)
   → Guard Plugins (validation, can reject)
@@ -333,7 +333,7 @@ Circuit breaker is a core gateway resilience capability (configured as core poli
 
 - **PRD**: [PRD.md](../PRD.md)
 - **DESIGN**: [DESIGN.md](../DESIGN.md)
-- **Related ADR**: [ADR: Component Architecture](../adr-component-architecture.md)
+- **Related ADR**: [ADR: Component Architecture](./0001-component-architecture.md)
 
 This decision directly addresses the following requirements or design elements:
 

@@ -38,7 +38,7 @@ Chosen option: "Semaphore-based in-memory limiting with local-only coordination 
 3. **Tenant-level**: Concurrent requests from a tenant (across all upstreams)
 
 All three limits are independent checks. A request must pass all applicable limits:
-```
+```text
 Request → [Tenant Limit] → [Upstream Limit] → [Route Limit] → Execute
 ```
 
@@ -48,14 +48,14 @@ Request → [Tenant Limit] → [Upstream Limit] → [Route Limit] → Execute
 
 Use in-memory semaphores for fast local checks:
 
-```
+```rust
 struct ConcurrencyLimiter {
     max_concurrent: usize,
     in_flight: AtomicUsize,
 }
 
 impl ConcurrencyLimiter {
-    fn try_acquire() -> Result<Permit, ConcurrencyLimitExceeded> {
+    fn try_acquire(&self) -> Result<Permit<'_>, ConcurrencyLimitExceeded> {
         let current = self.in_flight.fetch_add(1, Ordering::Relaxed);
         if current >= self.max_concurrent {
             self.in_flight.fetch_sub(1, Ordering::Relaxed);
@@ -80,7 +80,7 @@ impl Drop for Permit<'_> {
 
 #### Request Lifecycle
 
-```
+```text
 1. Acquire tenant-global permit
 2. Acquire upstream permit
 3. Acquire route permit
@@ -239,7 +239,7 @@ oagw_tenant_requests_in_flight{tenant_id} gauge
 
 **Independent checks**: Both rate limit and concurrency limit must pass:
 
-```
+```text
 Request → [Rate Limiter] → [Concurrency Limiter] → Execute
            └─ 429 if exceeded    └─ 503 if exceeded
 ```
@@ -357,7 +357,7 @@ Concurrency limits should align with HTTP client connection pool size:
 
 ```sql
 ALTER TABLE oagw_upstream
-    ADD COLUMN concurrency_limit JSONB;
+    ADD COLUMN concurrency_limit TEXT;
 
 -- Example value:
 -- {
@@ -372,7 +372,7 @@ ALTER TABLE oagw_upstream
 
 ```sql
 ALTER TABLE oagw_route
-    ADD COLUMN concurrency_limit JSONB;
+    ADD COLUMN concurrency_limit TEXT;
 
 -- Example value:
 -- {
