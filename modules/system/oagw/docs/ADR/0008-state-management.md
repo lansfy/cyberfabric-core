@@ -72,7 +72,7 @@ pub struct CPState {
 
 ### Request Flow with Caching
 
-```
+```text
 DP receives proxy request
 ├─ Check DP L1 cache for upstream config
 │  ├─ Hit: Use cached config (<1μs)
@@ -153,7 +153,7 @@ DP calls CP to check rate limits.
 ## More Information
 
 **Risk**: DP L1 cache becomes stale after config write.
-**Mitigation**: Explicit cache invalidation from CP, short-lived cache entries.
+**Mitigation**: Explicit cache invalidation from CP on config writes (no TTL; entries persist until invalidated).
 
 **Risk**: Per-instance rate limiting less accurate than distributed.
 **Mitigation**: Acceptable for MVP. Future: Add Redis-backed distributed rate limiter as DP extension.

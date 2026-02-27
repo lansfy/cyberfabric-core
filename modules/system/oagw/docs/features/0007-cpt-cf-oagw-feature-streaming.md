@@ -9,11 +9,11 @@
 
 ### 1.1 Overview
 
-Extend the base HTTP proxy engine with SSE (Server-Sent Events), WebSocket, and WebTransport streaming support, including proper connection lifecycle management and adaptive HTTP version negotiation with protocol version caching.
+Extend the base HTTP proxy engine with SSE (Server-Sent Events) and WebSocket streaming support, including proper connection lifecycle management and adaptive HTTP version negotiation with protocol version caching. WebTransport is future work (see Deliberate Omissions).
 
 ### 1.2 Purpose
 
-Many external APIs use SSE for streaming responses (e.g., OpenAI chat completions); WebSocket and WebTransport are needed for bidirectional real-time protocols. This feature extends the proxy flow defined in `cpt-cf-oagw-feature-proxy-engine` with streaming-aware connection handling. Covers `cpt-cf-oagw-fr-streaming`.
+Many external APIs use SSE for streaming responses (e.g., OpenAI chat completions); WebSocket is needed for bidirectional real-time protocols. This feature extends the proxy flow defined in `cpt-cf-oagw-feature-proxy-engine` with streaming-aware connection handling. Covers `cpt-cf-oagw-fr-streaming`.
 
 Design component: `cpt-cf-oagw-interface-api` (streaming variant of the proxy endpoint).
 
@@ -25,8 +25,8 @@ Design constraints enforced: `cpt-cf-oagw-constraint-https-only`.
 
 | Actor | Role in Feature |
 |-------|-----------------|
-| `cpt-cf-oagw-actor-app-developer` | Sends proxy requests to SSE/WebSocket/WebTransport endpoints |
-| `cpt-cf-oagw-actor-upstream-service` | Provides streaming responses via SSE/WebSocket/WebTransport |
+| `cpt-cf-oagw-actor-app-developer` | Sends proxy requests to SSE/WebSocket endpoints |
+| `cpt-cf-oagw-actor-upstream-service` | Provides streaming responses via SSE/WebSocket |
 
 ### 1.4 References
 
@@ -125,7 +125,9 @@ Design constraints enforced: `cpt-cf-oagw-constraint-https-only`.
     1. [ ] - `p1` - Send Close frame (1001 Going Away) to both sides - `inst-ws-11a`
     2. [ ] - `p1` - Release connection resources - `inst-ws-11b`
 
-### WebTransport Proxy Flow
+### WebTransport Proxy Flow (Future Work)
+
+> **Note**: WebTransport is out of scope for the current feature. The flow below is retained for future implementation planning.
 
 - [ ] `p2` - **ID**: `cpt-cf-oagw-flow-streaming-webtransport`
 
@@ -169,7 +171,7 @@ Design constraints enforced: `cpt-cf-oagw-constraint-https-only`.
 
 - [ ] `p1` - **ID**: `cpt-cf-oagw-algo-protocol-version-negotiation`
 
-**Input**: Upstream endpoint host/IP, requested protocol (SSE/WebSocket/WebTransport)
+**Input**: Upstream endpoint host/IP, requested protocol (SSE/WebSocket)
 
 **Output**: Negotiated HTTP version (HTTP/1.1 or HTTP/2) or error
 
@@ -194,21 +196,21 @@ Design constraints enforced: `cpt-cf-oagw-constraint-https-only`.
 
 - [ ] `p1` - **ID**: `cpt-cf-oagw-algo-streaming-connection-lifecycle`
 
-**Input**: Established streaming connection (SSE, WebSocket, or WebTransport), idle timeout configuration
+**Input**: Established streaming connection (SSE or WebSocket), idle timeout configuration
 
 **Output**: Connection managed through open/active/closing/closed phases with proper resource cleanup
 
 **Steps**:
 1. [ ] - `p1` - Initialize connection state: `OPEN` - `inst-lifecycle-1`
 2. [ ] - `p1` - Start idle timer with configured timeout (from upstream/route `timeout` guard plugin config or system default) - `inst-lifecycle-2`
-3. [ ] - `p1` - **FOR EACH** data event (SSE event, WebSocket message, WebTransport stream data) - `inst-lifecycle-3`
+3. [ ] - `p1` - **FOR EACH** data event (SSE event, WebSocket message) - `inst-lifecycle-3`
    1. [ ] - `p1` - Reset idle timer - `inst-lifecycle-3a`
    2. [ ] - `p1` - **IF** destination is not ready to receive (backpressure) - `inst-lifecycle-3b`
       1. [ ] - `p1` - Apply async backpressure: pause reading from source until destination is ready (TCP flow control) - `inst-lifecycle-3b1`
    3. [ ] - `p1` - Forward data to the appropriate destination - `inst-lifecycle-3c`
 4. [ ] - `p1` - **IF** idle timer expires (no data in either direction) - `inst-lifecycle-4`
    1. [ ] - `p1` - Transition to `CLOSING` state - `inst-lifecycle-4a`
-   2. [ ] - `p1` - Initiate protocol-appropriate close (SSE: close response stream; WebSocket: send Close frame 1001; WebTransport: close session) - `inst-lifecycle-4b`
+   2. [ ] - `p1` - Initiate protocol-appropriate close (SSE: close response stream; WebSocket: send Close frame 1001) - `inst-lifecycle-4b`
 5. [ ] - `p1` - **IF** upstream signals close (EOF, Close frame, session close) - `inst-lifecycle-5`
    1. [ ] - `p1` - Transition to `CLOSING` state - `inst-lifecycle-5a`
    2. [ ] - `p1` - Propagate close to caller - `inst-lifecycle-5b`
@@ -253,7 +255,9 @@ The system **MUST** handle HTTP Upgrade (`Upgrade: websocket`) by negotiating th
 **Touches**:
 - API: `GET /api/oagw/v1/proxy/{alias}/{path}` (WebSocket upgrade)
 
-### Implement WebTransport Streaming Proxy
+### Implement WebTransport Streaming Proxy (Future Work)
+
+> **Note**: WebTransport is out of scope for the current feature. The DoD below is retained for future implementation planning.
 
 - [ ] `p2` - **ID**: `cpt-cf-oagw-dod-webtransport-streaming`
 
@@ -296,9 +300,9 @@ The system **MUST** implement adaptive per-host HTTP version detection using ALP
 - [ ] Upstream rejection of WebSocket upgrade returns 502 ProtocolError with `X-OAGW-Error-Source: gateway`
 - [ ] Transform plugins are NOT executed on individual WebSocket frames
 - [ ] Auth and guard plugins execute before any streaming upgrade/session establishment
-- [ ] WebTransport session establishment requires HTTP/2 (verified via ALPN); failure returns 502 ProtocolError
-- [ ] WebTransport multiplexed streams (unidirectional and bidirectional) are forwarded between caller and upstream
-- [ ] WebTransport session close propagates error codes and closes all open streams
+- [ ] *(Future work)* WebTransport session establishment requires HTTP/2 (verified via ALPN); failure returns 502 ProtocolError
+- [ ] *(Future work)* WebTransport multiplexed streams (unidirectional and bidirectional) are forwarded between caller and upstream
+- [ ] *(Future work)* WebTransport session close propagates error codes and closes all open streams
 - [ ] HTTP version negotiation uses ALPN during TLS handshake, offering `h2` and `http/1.1`
 - [ ] Negotiated HTTP version is cached per `{scheme}://{host}:{port}` with 1-hour TTL
 - [ ] Cached HTTP version is used for subsequent requests to the same host
@@ -315,15 +319,15 @@ The system **MUST** implement adaptive per-host HTTP version detection using ALP
 
 ### Performance Considerations
 
-Streaming connections are forwarded at the TCP/TLS level with no per-event processing overhead beyond frame forwarding. SSE events, WebSocket messages, and WebTransport stream data are passed through as-is without buffering the full response body. The protocol version cache eliminates redundant ALPN negotiation for subsequent requests to the same host (1h TTL). Connection resources (sockets, buffers, timers) are released immediately on session end to prevent resource leaks under high concurrency.
+Streaming connections are forwarded at the TCP/TLS level with no per-event processing overhead beyond frame forwarding. SSE events and WebSocket messages are passed through as-is without buffering the full response body. The protocol version cache eliminates redundant ALPN negotiation for subsequent requests to the same host (1h TTL). Connection resources (sockets, buffers, timers) are released immediately on session end to prevent resource leaks under high concurrency.
 
 **Backpressure**: When one side of a streaming connection produces data faster than the other side can consume, OAGW relies on TCP flow control (receive window backpressure) to pause the fast sender. No application-level buffering beyond OS socket buffers is performed. This prevents unbounded memory growth under asymmetric throughput conditions.
 
 ### Security Considerations
 
-All streaming connections are subject to the same auth and guard plugin chain as regular proxy requests — authentication and authorization are enforced before any upgrade or session establishment. HTTPS-only constraint (`cpt-cf-oagw-constraint-https-only`) applies to all streaming upstream connections. Credential isolation per `cpt-cf-oagw-principle-cred-isolation` is maintained — secrets are resolved from `cred_store` at connection time and never logged or stored. WebSocket and WebTransport sessions do not re-authenticate after the initial handshake (session-scoped auth).
+All streaming connections are subject to the same auth and guard plugin chain as regular proxy requests — authentication and authorization are enforced before any upgrade or session establishment. HTTPS-only constraint (`cpt-cf-oagw-constraint-https-only`) applies to all streaming upstream connections. Credential isolation per `cpt-cf-oagw-principle-cred-isolation` is maintained — secrets are resolved from `cred_store` at connection time and never logged or stored. WebSocket sessions do not re-authenticate after the initial handshake (session-scoped auth).
 
-**Input validation**: SSE events and WebSocket/WebTransport frames are forwarded as-is (pass-through proxy). Per-message size limits are not enforced by default — the upstream controls payload granularity. An optional max WebSocket frame size can be configured per upstream/route; oversized messages result in Close frame 1009 (Message Too Big). WebSocket Close frame reason strings **MUST NOT** include internal gateway details to prevent information leakage.
+**Input validation**: SSE events and WebSocket frames are forwarded as-is (pass-through proxy). Per-message size limits are not enforced by default — the upstream controls payload granularity. An optional max WebSocket frame size can be configured per upstream/route; oversized messages result in Close frame 1009 (Message Too Big). WebSocket Close frame reason strings **MUST NOT** include internal gateway details to prevent information leakage.
 
 ### Configuration Parameters
 
@@ -340,7 +344,8 @@ All parameters are read from upstream/route configuration at connection time. Sy
 
 - **States section**: Not applicable — streaming connections are transient request-scoped sessions with no persistent entity lifecycle. Runtime connection states are managed within the connection lifecycle algorithm.
 - **gRPC streaming**: Out of scope — gRPC support (server, client, bidirectional streaming) is future work. See `cpt-cf-oagw-adr-grpc-support`.
-- **HTTP/3 (QUIC)**: Out of scope — QUIC-native WebTransport is future work. Current WebTransport support uses HTTP/2 extended CONNECT.
+- **WebTransport**: Out of scope — WebTransport session flows (connection setup, stream multiplexing, close) are future work. The WebTransport Proxy Flow and DoD sections are retained in this document for future implementation planning.
+- **HTTP/3 (QUIC)**: Out of scope — QUIC-native transport is future work.
 - **Rate limiting during streaming**: Out of scope — rate limiting on streaming connections (e.g., per-event or per-message throttling) belongs to `cpt-cf-oagw-feature-rate-limiting`.
 - **Metrics and audit logging for streaming**: Out of scope — streaming-specific metrics (connection duration, message counts, bytes transferred) belong to `cpt-cf-oagw-feature-observability`.
 - **UX/Accessibility**: Not applicable — OAGW is a backend API module with no user interface.

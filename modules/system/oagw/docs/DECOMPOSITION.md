@@ -398,14 +398,13 @@ The OAGW design is decomposed into eight features organized along functional bou
 
 - [ ] `p2` - **ID**: `cpt-cf-oagw-feature-streaming`
 
-- **Purpose**: Implement SSE, WebSocket, and WebTransport streaming with proper connection lifecycle management and HTTP version negotiation.
+- **Purpose**: Implement SSE and WebSocket streaming with proper connection lifecycle management and HTTP/2 version negotiation (ALPN).
 
 - **Depends On**: `cpt-cf-oagw-feature-proxy-engine`
 
 - **Scope**:
   - SSE event streaming: open, data forwarding, close, error handling
   - WebSocket session flows: upgrade, bidirectional messaging, close
-  - WebTransport session flows: connection setup, stream multiplexing, close
   - Connection lifecycle management for all streaming protocols
   - HTTP/2 adaptive version detection with ALPN during TLS handshake
   - Protocol version caching per host/IP (1h TTL)
@@ -413,6 +412,7 @@ The OAGW design is decomposed into eight features organized along functional bou
 
 - **Out of scope**:
   - HTTP/3 (QUIC) support (future work)
+  - WebTransport session flows: connection setup, stream multiplexing, close (future work)
   - gRPC streaming (future work; see `cpt-cf-oagw-adr-grpc-support`)
 
 - **Requirements Covered**:
@@ -456,7 +456,7 @@ The OAGW design is decomposed into eight features organized along functional bou
   - Histogram buckets: `[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]`
   - Cardinality management: no tenant labels, normalized paths, status class grouping
   - Structured JSON audit logging to stdout: request ID, tenant, host, path, method, status, duration, sizes
-  - Log level policies: INFO (success), WARN (rate limit/circuit breaker), ERROR (failures), DEBUG (plugin execution)
+  - Log level policies: INFO (success), WARN (rate limit/circuit breaker), ERROR (failures/timeouts); plugin execution is traced via structured events and metrics, not log levels
   - No PII, no secrets in logs; high-frequency sampling for volume control
   - CORS built-in handler: per-upstream/route configuration, preflight OPTIONS (no upstream round-trip)
   - SSRF protection: IP pinning rules, scheme allowlist (HTTPS-only), header stripping
@@ -527,7 +527,7 @@ cpt-cf-oagw-feature-domain-foundation
 - `cpt-cf-oagw-feature-proxy-engine` requires `cpt-cf-oagw-feature-plugin-system`: Proxy executes the plugin chain (Auth→Guard→Transform) during request processing
 - `cpt-cf-oagw-feature-tenant-hierarchy` requires `cpt-cf-oagw-feature-management-api`: Hierarchical config extends the base CRUD operations with sharing modes and merge strategies
 - `cpt-cf-oagw-feature-rate-limiting` requires `cpt-cf-oagw-feature-proxy-engine`: Rate limiting and circuit breaker are enforced during proxy request execution
-- `cpt-cf-oagw-feature-streaming` requires `cpt-cf-oagw-feature-proxy-engine`: Streaming extends the base proxy flow with SSE/WebSocket/WebTransport connection handling
+- `cpt-cf-oagw-feature-streaming` requires `cpt-cf-oagw-feature-proxy-engine`: Streaming extends the base proxy flow with SSE/WebSocket connection handling
 - `cpt-cf-oagw-feature-observability` requires `cpt-cf-oagw-feature-proxy-engine`: Metrics and logging instrument the proxy request pipeline
 - `cpt-cf-oagw-feature-management-api` and `cpt-cf-oagw-feature-plugin-system` are independent of each other and can be developed in parallel
 - `cpt-cf-oagw-feature-rate-limiting`, `cpt-cf-oagw-feature-streaming`, and `cpt-cf-oagw-feature-observability` are independent of each other and can be developed in parallel

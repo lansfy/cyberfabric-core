@@ -36,7 +36,7 @@ Chosen option: "Multi-layer caching: L1 (in-memory) + optional L2 (Redis) + Data
 |---|---|---|---|---|---|
 | L1 (In-Memory) | Per-instance LRU | 10,000 entries | No TTL (LRU eviction) | <1μs | |
 | L2 (Redis, optional) | Shared across instances | Unbounded | 5 minutes | ~1-2ms | MessagePack serialization |
-| Database (PostgreSQL) | Source of truth (JSONB) | Unlimited | N/A | ~5-10ms | Queried only on L1+L2 miss |
+| Database (PostgreSQL) | Source of truth (JSON text) | Unlimited | N/A | ~5-10ms | Queried only on L1+L2 miss |
 
 ### Lookup Flow
 
@@ -73,12 +73,29 @@ Caches are lazily populated on read (no proactive warming).
 ### Cache Keys
 
 - `upstream:{tenant_id}:{alias}` → UpstreamConfig
-- `route:{upstream_id}:{method}:{path}` → RouteConfig
+- `route:{upstream_id}:{method}:{path_prefix}` → RouteConfig
 - `plugin:{plugin_id}` → Plugin definition
 
 ### Cache Invalidation
 
-On config write (e.g., `PUT /upstreams/{id}`): (1) CP writes to database, (2) CP flushes L1 for affected keys, (3) CP flushes L2 (if enabled), (4) CP returns success, (5) DP flushes its own L1 cache (notified by CP or periodic sync).
+On config write (e.g., `PUT /upstreams/{id}`):
+
+1. CP writes to database (source of truth).
+2. CP flushes its own L1 for affected keys.
+3. CP flushes L2 (Redis, if enabled).
+4. CP returns success to the API handler.
+5. API handler sends an asynchronous invalidation notification to DP with the affected cache keys.
+6. DP flushes its own L1 cache for those keys and acknowledges.
+7. API handler returns the response to the caller.
+
+**Consistency model — bounded eventual consistency for DP:**
+
+- CP caches (L1, L2) are flushed **synchronously** before success is returned (steps 2–3). The next CP read is guaranteed to see fresh data.
+- DP L1 is flushed **asynchronously** via notification (step 5). During the window between CP success and DP flush, DP may serve stale config from its L1.
+- **Max staleness**: ~50–100 ms in normal operation (network notification latency). On notification failure, DP L1 entries persist until LRU eviction (1 000-entry capacity) — config changes are rare, so eviction is the practical upper bound.
+- **Operational controls**: Monitor `oagw_cache_invalidation_errors_total{layer="dp"}` and alert if the DP notification error rate exceeds 5 %. See [Cache Invalidation Scenarios](../../scenarios/flows/cache-invalidation.md) for detailed flows, failure modes, and timing tables.
+
+Strict (synchronous) invalidation — where CP waits for a DP flush acknowledgement before returning success — is not implemented. It may be added behind a feature flag if future use cases require immediate read-after-write consistency across planes.
 
 ### Deployment Modes
 
@@ -93,7 +110,7 @@ On config write (e.g., `PUT /upstreams/{id}`): (1) CP writes to database, (2) CP
 * Good, because simple deployment in single-exec mode (no Redis)
 * Bad, because cache invalidation complexity (must flush L1 and L2)
 * Bad, because Redis dependency in microservice mode
-* Bad, because potential stale data during cache TTL window
+* Bad, because DP L1 may serve stale data for ~50–100 ms after a config write (bounded eventual consistency; see Cache Invalidation above)
 
 ### Confirmation
 

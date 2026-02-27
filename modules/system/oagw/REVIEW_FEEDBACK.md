@@ -343,11 +343,12 @@
     - Impact: Metrics drift and "stuck in-flight" gauges, incorrect autoscaling/alerting
     - Recommendation: Ensure decrement happens in `drop` guard, add tests for error paths
 
-- [ ] 6.5 **[Medium]** HTTP/3 and WebTransport Scope Mismatch (Cascade)
+- [x] 6.5 **[Medium]** HTTP/3 and WebTransport Scope Mismatch (Cascade) — **RESOLVED**
     - Location: `DESIGN.md` + examples around HTTP/3 / WebTransport
     - Issue: Prompt lists HTTP/3 and WebTransport but DESIGN.md states HTTP/3 is future work
     - Impact: Misaligned expectations for supported protocols
     - Recommendation: Add explicit "supported in v1" list in DESIGN.md, ensure examples/tests match only those
+    - Resolution: WebTransport marked as future work consistently across PRD, DESIGN, DECOMPOSITION, Feature 7 spec, and ADR/0013. WebTransport flow/DoD sections retained in Feature 7 with "Future Work" annotations.
 
 - [ ] 6.6 **[Medium]** Missing Test: Plugin Type Mismatch (Claude)
     - Location: DESIGN.md Plugin Resolution Algorithm (lines 526-532)

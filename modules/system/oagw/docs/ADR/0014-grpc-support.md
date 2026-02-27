@@ -31,7 +31,9 @@ OAGW currently supports HTTP/1.1 requests. Modern APIs increasingly use gRPC for
 
 Chosen option: "HTTP/2 with gRPC multiplexing", because gRPC is HTTP/2 with specific headers, making content-type detection simple, reliable, and standard (matches Envoy, Istio, Linkerd).
 
-Single port handles both HTTP/1.1 and gRPC (HTTP/2). Detection via `content-type: application/grpc*` header check:
+> **Note:** gRPC proxy support is not implemented yet and is targeted for Phase 3; current OAGW proxy paths do not route gRPC.
+
+Single port handles both HTTP/1.1 and gRPC (HTTP/2) *(Phase 3 — not yet implemented)*. Detection via `content-type: application/grpc*` header check *(Phase 3 — not yet implemented)*:
 
 ```rust
 let is_grpc = req.headers()
@@ -69,11 +71,13 @@ Internally maps to HTTP/2 path: `/example.v1.UserService/GetUser`.
 | UNAVAILABLE | 14 | LinkUnavailable |
 | DEADLINE_EXCEEDED | 4 | RequestTimeout |
 
-### All Streaming Patterns Supported
+### All Streaming Patterns Supported *(Phase 3 — not yet implemented)*
 
 OAGW acts as transparent proxy for unary, server streaming, client streaming, and bidirectional streaming. Does not buffer streams — forwards gRPC frames directly without parsing Protobuf.
 
-```
+> **Note:** gRPC streaming proxy support is not implemented yet and is targeted for Phase 3.
+
+```text
 Unary:          Client ──request──> Server ──response──> Client
 Server stream:  Client ──request──> Server ──stream───> Client
 Client stream:  Client ──stream──> Server ──response──> Client
@@ -93,7 +97,9 @@ Bidirectional:  Client <=stream==> Server
 
 Prototype must validate: (1) ALPN negotiation with target Rust TLS stack, (2) reliable gRPC detection from content-type, (3) bidirectional streaming without buffering, (4) <5% overhead vs direct gRPC, (5) gRPC status code preservation, (6) HTTP/1.1 coexistence on same port.
 
-Acceptance criteria:
+Acceptance criteria *(Phase 3 — not yet implemented)*:
+
+> **Note:** gRPC proxy support is not implemented yet and is targeted for Phase 3; the criteria below describe the future-state validation targets.
 
 * gRPC health check (`grpc.health.v1.Health/Check`) works end-to-end
 * HTTP/1.1 REST request to same port succeeds
@@ -107,7 +113,7 @@ Acceptance criteria:
 
 Dedicated port (e.g., 50051) for gRPC traffic.
 
-```
+```text
 Client → :443 (HTTP/REST)
 Client → :50051 (gRPC only)
          ↓
@@ -134,9 +140,9 @@ Configuration:
 
 ### Connection hijacking
 
-Single port, ALPN-based detection with first-request peeking.
+Single-port, ALPN-based detection with first-request peeking.
 
-```
+```text
 Client → :443
          ↓
    TLS Handshake (ALPN: h2)
@@ -182,7 +188,7 @@ async fn handle_connection(stream: TcpStream, tls_acceptor: TlsAcceptor) {
 
 ### HTTP/2 with gRPC multiplexing
 
-Single port, native HTTP/2, content-type header detection.
+Single-port, native HTTP/2, content-type header detection.
 
 Unified configuration:
 

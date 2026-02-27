@@ -193,8 +193,8 @@ For plugin trait definitions and architecture, see [DESIGN.md](./DESIGN.md#plugi
 
 ### Streaming Support
 
-Main protocol focus is HTTP family traffic: HTTP request/response, SSE, WebSocket, and WebTransport session flows.
-gRPC support is planned for a later phase (p4).
+Main protocol focus is HTTP family traffic: HTTP request/response, SSE, and WebSocket session flows.
+WebTransport and gRPC support are planned for later phases (future work).
 
 ### Configuration Layering
 

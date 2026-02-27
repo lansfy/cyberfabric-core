@@ -121,7 +121,7 @@ X-OAGW-Error-Source: gateway
 
 ### Queue Flow
 
-```
+```text
 Request arrives
   ↓
 [Try acquire permit]
@@ -175,7 +175,7 @@ Security: `allow_client_override: false` prevents priority abuse. Use authentica
 
 Queue tracks estimated memory per request:
 
-```
+```text
 memory_estimate =
     headers_size +
     body_size (if buffered) +
@@ -186,11 +186,12 @@ Large request handling:
 
 * Streaming bodies: Not buffered, only metadata queued (∼200 bytes)
 * Buffered bodies: Entire request counted against `memory_limit`
-* If `memory_limit` exceeded: Reject with `413 Payload Too Large`
+* Single request too large (body exceeds `memory_limit`): Reject with `413 Payload Too Large` before enqueuing
+* Aggregate queue memory exhausted (sum of all queued requests ≥ `memory_limit`): Reject with `503 Service Unavailable` (see `x.oagw.queue.memory_limit.v1`)
 
 Queue memory tracking:
 
-```
+```rust
 struct RequestQueue {
     items: VecDeque<QueuedRequest>,
     total_memory: AtomicUsize,
@@ -199,7 +200,7 @@ struct RequestQueue {
 
 impl RequestQueue {
     fn try_enqueue(&mut self, req: QueuedRequest) -> Result<(), QueueError> {
-        let new_total = self.total_memory.load() + req.estimated_size;
+        let new_total = self.total_memory.load(Ordering::Relaxed) + req.estimated_size;
 
         if new_total > self.config.memory_limit {
             return Err(QueueError::MemoryLimitExceeded);
@@ -209,8 +210,9 @@ impl RequestQueue {
             return Err(QueueError::QueueFull);
         }
 
+        let size = req.estimated_size;
         self.items.push_back(req);
-        self.total_memory.fetch_add(req.estimated_size, Ordering::Relaxed);
+        self.total_memory.fetch_add(size, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -218,7 +220,7 @@ impl RequestQueue {
 
 ### Exponential Backoff Recommendation
 
-```
+```text
 backoff_seconds = min(
     initial_backoff * (2 ^ retry_count),
     max_backoff
@@ -233,24 +235,26 @@ Jitter: Add ±20% randomization to prevent thundering herd.
 
 Permit acquisition flow:
 
-```
-async fn handle_request(req: Request) -> Response {
+```rust
+async fn handle_request(req: Request) -> Result<Response, ProxyError> {
     // 1. Check rate limit
     rate_limiter.check().await?;
 
     // 2. Try acquire concurrency permit
-    let permit = match concurrency_limiter.try_acquire() {
-        Ok(p) => p,
+    let permit: Permit = match concurrency_limiter.try_acquire() {
+        Ok(permit) => permit,
         Err(_) if config.strategy == "reject" => {
             return Err(ConcurrencyLimitExceeded);
         }
         Err(_) if config.strategy == "queue" => {
-            // Enqueue and wait
-            queue.enqueue(req).await?
+            // Enqueue: tracks req metadata for memory/timeout,
+            // waits until a Permit is available or timeout expires
+            queue.enqueue(&req).await?  // returns Permit
         }
+        Err(_) => return Err(ConcurrencyLimitExceeded),
     };
 
-    // 3. Execute request
+    // 3. Execute request (permit held in scope)
     let response = upstream_client.send(req).await?;
 
     // 4. Permit auto-released via Drop
@@ -260,8 +264,8 @@ async fn handle_request(req: Request) -> Response {
 
 Queue consumer — background task continuously consumes queue when permits available:
 
-```
-async fn queue_consumer(queue: RequestQueue, limiter: ConcurrencyLimiter) {
+```rust
+async fn queue_consumer(queue: Arc<RequestQueue>, limiter: Arc<ConcurrencyLimiter>) {
     loop {
         // Wait for permit
         let permit = limiter.acquire().await;
@@ -274,7 +278,7 @@ async fn queue_consumer(queue: RequestQueue, limiter: ConcurrencyLimiter) {
                 continue;
             }
             None => {
-                permit.release();
+                drop(permit);
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
             }
@@ -282,9 +286,10 @@ async fn queue_consumer(queue: RequestQueue, limiter: ConcurrencyLimiter) {
 
         // Execute request
         tokio::spawn(async move {
-            let response = execute_request(req).await;
-            req.respond(response);
-            // permit auto-released
+            let (data, responder) = req.into_parts();
+            let response = execute_request(data).await;
+            responder.respond(response);
+            drop(permit); // permit released after request completes
         });
     }
 }
@@ -352,10 +357,21 @@ oagw_retry_after_seconds{host} histogram
 
 ```json
 {
+  "type": "gts.x.core.errors.err.v1~x.oagw.request.payload_too_large.v1",
+  "title": "Payload Too Large",
+  "status": 413,
+  "detail": "Request body (12MB) exceeds queue memory_limit (10MB); not enqueued",
+  "request_body_bytes": 12582912,
+  "memory_limit_bytes": 10485760
+}
+```
+
+```json
+{
   "type": "gts.x.core.errors.err.v1~x.oagw.queue.memory_limit.v1",
   "title": "Queue Memory Limit Exceeded",
   "status": 503,
-  "detail": "Request queue memory limit reached (10MB/10MB)",
+  "detail": "Aggregate queue memory reached (10MB/10MB); cannot enqueue",
   "queue_memory_bytes": 10485760,
   "memory_limit_bytes": 10485760,
   "retry_after_seconds": 1

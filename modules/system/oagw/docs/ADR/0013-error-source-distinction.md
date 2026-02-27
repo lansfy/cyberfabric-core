@@ -18,7 +18,7 @@ OAGW acts as a proxy between clients and upstream services. Both OAGW and upstre
 * Compatibility with existing HTTP clients and tooling
 * Support for non-JSON response bodies
 * Minimal overhead for success path
-* Works across all supported protocols (HTTP, gRPC, WebSocket, WebTransport, SSE)
+* Works across all supported protocols (HTTP, WebSocket, SSE) and future protocols (WebTransport, gRPC)
 
 ## Considered Options
 

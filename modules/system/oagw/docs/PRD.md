@@ -185,7 +185,7 @@ The system **MUST** support an `enabled` boolean field (default: `true`) on upst
 
 - [ ] `p1` - **ID**: `cpt-cf-oagw-fr-request-proxy`
 
-The system **MUST** proxy requests via `{METHOD} /api/oagw/v1/proxy/{alias}[/{path}][?{query}]`. It **MUST** resolve the upstream by alias, match the route by method/path, merge configurations (upstream < route < tenant), execute the plugin chain, and forward the request to the external service. No automatic retries are performed; each inbound request results in at most one upstream attempt.
+The system **MUST** proxy requests via `{METHOD} /api/oagw/v1/proxy/{alias}[/{path}][?{query}]`. It **MUST** resolve the upstream by alias, match the route by method/path, merge configurations (upstream < route < tenant), execute the plugin chain, and forward the request to the external service. The gateway performs no automatic full client-request retries—i.e., it will not re-issue the original client request as a whole—but connector-level endpoint/connection failover or connection-retry attempts (endpoint-level retries) performed by the upstream connector are permitted.
 
 - **Rationale**: Core value proposition — unified proxy endpoint that handles credential injection, transformation, and forwarding transparently.
 - **Actors**: `cpt-cf-oagw-actor-app-developer`
@@ -300,7 +300,7 @@ Override rules:
 
 **Example — Hierarchical Override**:
 
-```
+```text
 Partner Tenant:
   upstream: api.openai.com
   auth: { secret_ref: "cred://partner-openai-key", sharing: "inherit" }
@@ -325,7 +325,7 @@ The system **MUST** identify upstreams by alias in proxy URLs: `{METHOD} /api/oa
 
 **Shadowing Resolution Order**:
 
-```
+```text
 Request from: subsub-tenant
 Alias: "api.openai.com"
 
@@ -379,7 +379,7 @@ Multiple endpoints within the same upstream form a load-balance pool. Requests a
 
 When a descendant shadows an ancestor's alias, enforced limits from the ancestor still apply:
 
-```
+```text
 Root: alias "api.openai.com", rate_limit: { sharing: "enforce", rate: 10000 }
 Sub:  alias "api.openai.com" (shadows root)
 
@@ -555,7 +555,7 @@ None. All project-default NFRs apply to this module.
 
 ## 8. Use Cases
 
-#### Proxy HTTP Request
+### Proxy HTTP Request
 
 - [ ] `p1` - **ID**: `cpt-cf-oagw-usecase-proxy-request`
 

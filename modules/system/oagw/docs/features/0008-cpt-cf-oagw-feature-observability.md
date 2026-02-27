@@ -44,12 +44,10 @@ Operators need full visibility into outbound API traffic patterns, errors, and p
 | Histogram buckets (seconds) | `[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]` | Yes | `OagwConfig` |
 | DP L1 cache capacity | 1,000 entries | Yes | `OagwConfig` |
 | CP L1 cache capacity | 10,000 entries | Yes | `OagwConfig` |
-| DP L1 cache TTL | 30s | Yes | `OagwConfig` |
-| CP L1 cache TTL | 60s | Yes | `OagwConfig` |
 | CP L2 cache TTL | 300s | Yes | `OagwConfig` |
 | Redis operation timeout | 50ms | Yes | `OagwConfig` |
 | Audit log sampling rate | 1/100 | Yes | Per-route configurable |
-| CORS max_age default | 3600s | Yes | Per-upstream/route |
+| CORS max_age default | 86400s | Yes | Per-upstream/route |
 
 ### 1.7 Non-Applicable Domains
 
@@ -220,6 +218,31 @@ Operators need full visibility into outbound API traffic patterns, errors, and p
 7. [ ] - `p1` - Validate query parameters against route `query_allowlist` if configured - `inst-ssrf-7`
 8. [ ] - `p1` - **RETURN** pass (request is safe to forward) - `inst-ssrf-8`
 
+### HTTP Smuggling Prevention
+
+- [ ] `p2` - **ID**: `cpt-cf-oagw-algo-obs-http-smuggling`
+
+**Input**: Inbound HTTP request (headers, body stream)
+
+**Output**: Validation result (pass or reject with error)
+
+**Steps**:
+1. [ ] - `p2` - Scan all header lines for bare CR (`\r` without `\n`) or bare LF (`\n` without preceding `\r`); reject with 400 ValidationError: "Malformed header line (bare CR or LF)" if found - `inst-hsmug-1`
+2. [ ] - `p2` - Extract Content-Length and Transfer-Encoding headers from inbound request - `inst-hsmug-2`
+3. [ ] - `p2` - **IF** both Content-Length and Transfer-Encoding are present - `inst-hsmug-3`
+   1. [ ] - `p2` - **RETURN** reject with 400 ValidationError: "Ambiguous framing: request contains both Content-Length and Transfer-Encoding" - `inst-hsmug-3a`
+4. [ ] - `p2` - **IF** Transfer-Encoding is present - `inst-hsmug-4`
+   1. [ ] - `p2` - **IF** Transfer-Encoding value (case-insensitive, trimmed) is not exactly `chunked` - `inst-hsmug-4a`
+      1. [ ] - `p2` - **RETURN** reject with 400 ValidationError: "Unsupported Transfer-Encoding value; only 'chunked' is allowed" - `inst-hsmug-4a1`
+5. [ ] - `p2` - **IF** Content-Length is present - `inst-hsmug-5`
+   1. [ ] - `p2` - Parse Content-Length value as a non-negative integer (no leading zeros, no whitespace, no sign) - `inst-hsmug-5a`
+   2. [ ] - `p2` - **IF** parse fails - `inst-hsmug-5b`
+      1. [ ] - `p2` - **RETURN** reject with 400 ValidationError: "Content-Length is not a valid non-negative integer" - `inst-hsmug-5b1`
+   3. [ ] - `p2` - After body is fully received, verify actual body size matches declared Content-Length - `inst-hsmug-5c`
+   4. [ ] - `p2` - **IF** mismatch - `inst-hsmug-5d`
+      1. [ ] - `p2` - **RETURN** reject with 400 ValidationError: "Body size does not match Content-Length" - `inst-hsmug-5d1`
+6. [ ] - `p2` - **RETURN** pass (request framing is unambiguous and well-formed) - `inst-hsmug-6`
+
 ### Multi-Layer Config Cache
 
 - [ ] `p2` - **ID**: `cpt-cf-oagw-algo-obs-cache-layers`
@@ -231,11 +254,11 @@ Operators need full visibility into outbound API traffic patterns, errors, and p
 **Eviction policy**: LRU (least recently used) for both in-memory cache layers. When capacity is reached, the least recently accessed entry is evicted before inserting new entries.
 
 **Steps**:
-1. [ ] - `p2` - Check DP L1 cache (in-memory LRU, capacity 1,000 entries, TTL 30s, target latency <1μs) - `inst-cache-1`
-2. [ ] - `p2` - **IF** DP L1 hit and entry age < DP L1 TTL (30s) - `inst-cache-2`
+1. [ ] - `p2` - Check DP L1 cache (in-memory LRU, capacity 1,000 entries, no TTL, LRU eviction, target: p95 ≤ 1 μs under reference conditions†) - `inst-cache-1`
+2. [ ] - `p2` - **IF** DP L1 hit - `inst-cache-2`
    1. [ ] - `p2` - **RETURN** cached configuration - `inst-cache-2a`
-3. [ ] - `p2` - Check CP L1 cache (in-memory LRU, capacity 10,000 entries, TTL 60s, target latency <1μs) - `inst-cache-3`
-4. [ ] - `p2` - **IF** CP L1 hit and entry age < CP L1 TTL (60s) - `inst-cache-4`
+3. [ ] - `p2` - Check CP L1 cache (in-memory LRU, capacity 10,000 entries, no TTL, LRU eviction, target: p95 ≤ 1 μs under reference conditions†) - `inst-cache-3`
+4. [ ] - `p2` - **IF** CP L1 hit - `inst-cache-4`
    1. [ ] - `p2` - Promote entry to DP L1 cache - `inst-cache-4a`
    2. [ ] - `p2` - **RETURN** cached configuration - `inst-cache-4b`
 5. [ ] - `p2` - **IF** CP L2 Redis is configured - `inst-cache-5`
@@ -342,7 +365,7 @@ The system **MUST** enforce strict HTTP parsing to prevent smuggling attacks:
 - Enforce Content-Length as valid integer matching actual body size
 
 **Implements**:
-- `cpt-cf-oagw-algo-obs-ssrf-protection` (header validation steps)
+- `cpt-cf-oagw-algo-obs-http-smuggling`
 
 **Touches**:
 - Entities: proxy pipeline request validation
@@ -352,9 +375,9 @@ The system **MUST** enforce strict HTTP parsing to prevent smuggling attacks:
 - [ ] `p2` - **ID**: `cpt-cf-oagw-dod-obs-config-caching`
 
 The system **MUST** implement multi-layer configuration caching to minimize DB reads on the proxy hot path:
-- DP L1: in-memory LRU, 1,000 entries, TTL 30s, target latency <1μs
-- CP L1: in-memory LRU, 10,000 entries, TTL 60s, target latency <1μs
-- CP L2: Redis (optional), TTL 300s, operation timeout 50ms, target latency ~1-2ms
+- DP L1: in-memory LRU, 1,000 entries, no TTL (LRU eviction + explicit invalidation), target: p95 ≤ 1 μs under reference conditions†
+- CP L1: in-memory LRU, 10,000 entries, no TTL (LRU eviction + explicit invalidation), target: p95 ≤ 1 μs under reference conditions†
+- CP L2: Redis (optional), TTL 300s, operation timeout 50ms, target: p95 ≤ 2 ms under reference conditions†
 - DB: source of truth (fallback)
 
 Cache eviction **MUST** use LRU (least recently used) for both in-memory layers. Cache invalidation **MUST** occur on configuration changes (upstream/route create/update/delete). Cache promotion **MUST** flow from lower layers to upper layers on cache misses.
@@ -386,7 +409,7 @@ When Redis (CP L2) is unavailable, the system **MUST** degrade gracefully by ski
 - [ ] Path traversal sequences are rejected
 - [ ] Requests with ambiguous CL/TE combinations are rejected
 - [ ] Bare CR/LF characters in headers are rejected
-- [ ] DP L1 cache serves configuration with <1μs latency on cache hit
+- [ ] DP L1 cache serves configuration with p95 ≤ 1 μs latency on cache hit (reference conditions†)
 - [ ] Cache invalidation triggers on configuration changes propagate to all cache layers
 - [ ] Cache miss falls through DP L1 → CP L1 → CP L2 (Redis) → DB in order
 - [ ] When Redis (CP L2) is unavailable, proxy requests degrade gracefully by falling through to DB without failure
@@ -394,3 +417,7 @@ When Redis (CP L2) is unavailable, the system **MUST** degrade gracefully by ski
 - [ ] Cache eviction uses LRU policy; at-capacity caches evict least recently used entries
 - [ ] Audit log entries include `trace_id` field for distributed tracing correlation
 - [ ] W3C Trace Context (`traceparent` header) is propagated from inbound requests when present
+
+---
+
+**†** Cache latency targets are p95 values measured on a single-core micro-benchmark with a warm, non-contended cache. Hardware profile (e.g., AMD EPYC 7763 or Apple M2) and load profile (e.g., 10 000 sequential lookups, single thread) must be documented alongside benchmark results for reproducibility.

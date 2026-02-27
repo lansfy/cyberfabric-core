@@ -1,7 +1,7 @@
 ---
 status: proposed
 date: 2026-02-03
-decision-makers: TBD
+decision-makers: OAGW Team
 ---
 
 # Circuit Breaker — Core Gateway Functionality with Redis-Based Distributed State
@@ -35,7 +35,7 @@ Chosen option: "Circuit breaker as core gateway functionality with Redis-based d
 
 ### State Machine
 
-```
+```text
      CLOSED ──(failure_threshold reached)──► OPEN
         ▲                                      │
         │                              (timeout_seconds)
@@ -163,7 +163,7 @@ Circuit breaker is a first-class field in upstream definitions (not a plugin).
 
 State keys:
 
-```
+```text
 oagw:cb:{tenant_id}:{upstream_id}:state        → "CLOSED" | "OPEN" | "HALF_OPEN"
 oagw:cb:{tenant_id}:{upstream_id}:failures     → counter (TTL: rolling window)
 oagw:cb:{tenant_id}:{upstream_id}:opened_at    → timestamp
@@ -202,15 +202,46 @@ When circuit is **OPEN**, OAGW can respond in different ways:
 
 - **fail_fast** (default): Immediately return `503 CircuitBreakerOpen` without calling upstream. Client can handle error and retry with backoff. Latency: <1ms (no network call).
 - **fallback_endpoint**: Route request to alternative upstream (`fallback_endpoint_id` required). Use cases: multi-region deployments (primary: us-east, fallback: us-west), backup service providers (primary: OpenAI, fallback: Azure OpenAI). Fallback upstream must be API-compatible. Latency: normal request latency + routing overhead.
-- **cached_response**: Return last successful response from cache (if available). Use case: read-only APIs where stale data is acceptable (config, metadata). Response caching must be enabled on route. Latency: <10ms (cache lookup). Only for idempotent GET requests.
+- **cached_response**: Return last successful response from cache (if available). Use case: read-only APIs where stale data is acceptable (config, metadata). Only for idempotent GET requests. Latency: <10ms (cache lookup).
+
+  > **Cache-key scoping (mandatory).** Because OAGW is multi-tenant, every
+  > cached response **must** be keyed by all of the following components to
+  > prevent cross-tenant and cross-principal data leakage:
+  >
+  > | Component | Source |
+  > |---|---|
+  > | `tenant_id` | Security context of the inbound request |
+  > | `upstream_id` | Resolved upstream for the route |
+  > | `route_id` | Matched route definition |
+  > | `principal_id` (or token fingerprint) | Authenticated caller identity |
+  > | HTTP `Vary` header fields | Values of each header listed in the upstream response's `Vary` header |
+  >
+  > Implementations **must** honor HTTP `Vary` semantics: if the upstream
+  > response includes a `Vary` header, the indicated request-header values
+  > become additional cache-key components. A `Vary: *` response is
+  > never cacheable.
+  >
+  > **Route-level response caching is disabled by default.** The
+  > `cached_response` strategy is only active when the route explicitly
+  > configures a valid `response_cache` policy (including cache-key
+  > components and a TTL). Without such a policy the gateway treats the
+  > strategy as `fail_fast` and returns `503`.
+  >
+  > **Design-principle constraint:** OAGW's baseline stance is "no response
+  > caching" (`cpt-cf-oagw-principle-no-cache`). The `cached_response`
+  > fallback is a narrow, opt-in exception limited to circuit-breaker
+  > open state; it does **not** enable general-purpose response caching.
 
 ### Integration with Error Handling
 
 Circuit breaker evaluates responses and updates state:
 
 ```rust
-fn handle_upstream_response(response: UpstreamResponse, circuit: &CircuitBreaker) -> Result<Response> {
-    let is_failure = match response {
+async fn handle_upstream_response(
+    response: Result<UpstreamResponse, UpstreamError>,
+    circuit: &CircuitBreaker,
+) -> Result<Response> {
+    let is_failure = match &response {
         Ok(resp) if circuit.config.failure_conditions.status_codes.contains(&resp.status) => true,
         Ok(_) => false,
         Err(UpstreamError::Timeout) if circuit.config.failure_conditions.timeout => true,
@@ -224,7 +255,7 @@ fn handle_upstream_response(response: UpstreamResponse, circuit: &CircuitBreaker
         circuit.record_success().await?;
     }
 
-    response
+    response.map(|r| r.into())
 }
 ```
 
@@ -251,7 +282,7 @@ When circuit is open:
 
 Headers:
 
-```
+```http
 Retry-After: 15
 X-Circuit-State: OPEN
 ```
@@ -324,7 +355,7 @@ Circuit breaker configuration follows same inheritance rules as rate limits:
 
 ### Observability and Metrics
 
-```
+```promql
 oagw_circuit_breaker_state{upstream_id, tenant_id} → 0=CLOSED, 1=HALF_OPEN, 2=OPEN
 oagw_circuit_breaker_failures_total{upstream_id, tenant_id}
 oagw_circuit_breaker_state_changes_total{upstream_id, tenant_id, from_state, to_state}
