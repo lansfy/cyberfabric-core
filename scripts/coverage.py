@@ -751,15 +751,16 @@ def start_instrumented_server(config_file, output_dir, port=None):
     target_real = os.path.realpath(log_file)
     if os.path.commonpath([base_real, target_real]) != base_real:
         raise Exception("Invalid file path")
+    log_fp = open(target_real, "w")
     server_process = popen_new_group(
         cmd,
         env=env2,
         cwd=PROJECT_ROOT,
-        stdout=open(target_real, "w"),
+        stdout=log_fp,
         stderr=subprocess.STDOUT,
     )
 
-    return server_process, log_file, port
+    return server_process, log_file, port, log_fp
 
 
 def run_e2e_tests(base_url, test_filter=None):
