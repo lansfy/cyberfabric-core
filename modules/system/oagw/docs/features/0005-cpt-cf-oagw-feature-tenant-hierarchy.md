@@ -206,7 +206,7 @@ Enables partner/customer hierarchies where partners share upstream access with c
 1. [ ] - `p2` - Obtain ancestor chain for requesting tenant (ordered: self → parent → ... → root) - `inst-shadow-1`
 2. [ ] - `p2` - **FOR EACH** tenant_id in chain (self first) - `inst-shadow-2`
    1. [ ] - `p2` - DB: SELECT from oagw_upstream WHERE tenant_id = :current AND alias = :alias - `inst-shadow-2a`
-   2. [ ] - `p2` - **IF** upstream found AND (tenant_id == requesting_tenant OR any per-field sharing flag — `auth.sharing`, `rate_limit.sharing`, `plugins.sharing`, `tags.sharing`, `cors.sharing` — is != `private`) - `inst-shadow-2b`
+   2. [ ] - `p2` - **IF** upstream found AND (tenant_id == requesting_tenant OR any per-field sharing flag — `auth_sharing`, `rate_limit_sharing`, `plugins_sharing`, `tags_sharing`, `cors_sharing` — is != `private`) - `inst-shadow-2b`
       1. [ ] - `p2` - **IF** upstream is enabled - `inst-shadow-2b1`
          1. [ ] - `p2` - **RETURN** found upstream as selected match - `inst-shadow-2b1a`
       2. [ ] - `p2` - **ELSE** (upstream disabled) - `inst-shadow-2b2`
@@ -231,7 +231,7 @@ Enables partner/customer hierarchies where partners share upstream access with c
 3. [ ] - `p2` - **IF** required permission is `oagw:upstream:override_auth` - `inst-perm-3`
    1. [ ] - `p2` - Check token has `oagw:upstream:override_auth` AND ancestor auth sharing is `inherit` - `inst-perm-3a`
 4. [ ] - `p2` - **IF** required permission is `oagw:upstream:override_rate` - `inst-perm-4`
-   1. [ ] - `p2` - Check token has `oagw:upstream:override_rate` AND ancestor rate_limit sharing is `inherit` - `inst-perm-4a`
+   1. [ ] - `p2` - Check token has `oagw:upstream:override_rate` AND ancestor rate_limit_sharing is `inherit` - `inst-perm-4a`
 5. [ ] - `p2` - **IF** required permission is `oagw:upstream:add_plugins` - `inst-perm-5`
    1. [ ] - `p2` - Check token has `oagw:upstream:add_plugins` AND ancestor plugins sharing is `inherit` - `inst-perm-5a`
 6. [ ] - `p2` - **IF** permission check fails - `inst-perm-6`
@@ -248,7 +248,7 @@ Enables partner/customer hierarchies where partners share upstream access with c
 
 **Steps**:
 1. [ ] - `p2` - **IF** descendant has configured rate_limit, start with descendant's rate as candidate; **ELSE** set candidate to unbounded (no limit) - `inst-rate-1`
-2. [ ] - `p2` - **FOR EACH** ancestor with `rate_limit.sharing: enforce` - `inst-rate-2`
+2. [ ] - `p2` - **FOR EACH** ancestor with `rate_limit_sharing: enforce` - `inst-rate-2`
    1. [ ] - `p2` - `candidate = min(candidate, ancestor.rate_limit.rate)` — enforced ancestor always constrains, even if descendant is unbounded - `inst-rate-2a`
 3. [ ] - `p2` - **IF** route-level rate_limit is defined - `inst-rate-3`
    1. [ ] - `p2` - `candidate = min(candidate, route.rate_limit.rate)` - `inst-rate-3a`

@@ -300,7 +300,7 @@ Tenant: sub-tenant
 2. Find Upstream B in sub-tenant (closest) → use this upstream
 3. Collect enforced configs from ancestors with same alias:
    - Root has Upstream A with alias "api.openai.com" 
-   - Root's rate_limit.sharing = "enforce" → collect
+   - Root's rate_limit_sharing = "enforce" → collect
 4. Merge: effective_rate = min(root.enforced:10000, sub:500) = 500
 5. Find tenant binding, apply merged config
 6. Forward request to Upstream B's server
