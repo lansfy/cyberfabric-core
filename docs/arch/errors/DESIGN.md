@@ -112,6 +112,11 @@ See [§ 4. Category Reference](#4-category-reference) for full definitions inclu
 | `cpt-cf-errors-fr-public-private-isolation` | `debug_info: Option<DebugInfo>` omitted in production via `Problem::from_error()` |
 | `cpt-cf-errors-fr-compile-time-safety` | Typed enum + `#[resource_error]` macro |
 | `cpt-cf-errors-fr-gts-identification` | `GtsSchema` trait with `SCHEMA_ID` const per context type |
+| `cpt-cf-errors-fr-single-line-construction` | One constructor per category; `CanonicalError::category(ctx)` single expression |
+| `cpt-cf-errors-fr-resource-scoped-construction` | `#[resource_error]` macro generates constructors with auto-tagged `resource_type` |
+| `cpt-cf-errors-fr-library-error-propagation` | Blanket `From` impls for common library errors (`io::Error`, `serde_json::Error`, `DbErr`) |
+| `cpt-cf-errors-fr-schema-drift-prevention` | Showcase snapshot tests + `cargo-semver-checks` + schema file diffing in CI |
+| `cpt-cf-errors-fr-standard-adoption` | RFC 9457 Problem Details as REST wire format |
 
 #### Key ADRs
 
@@ -182,7 +187,9 @@ Every canonical category has a GTS identifier assigned before any code is writte
 
 - [ ] `p2` - **ID**: `cpt-cf-errors-principle-fail-safe-fallback`
 
-Any error that does not match a canonical category is mapped to `internal` with a trace ID. The error middleware catches panics, unhandled rejections, and unknown error types, wrapping them as `internal` errors. No error escapes the system without a canonical category.
+Any error that does not match a canonical category is mapped to `internal` with a trace ID. No error escapes the system without a canonical category.
+
+> **Note**: Full enforcement of this principle (catching panics, unhandled rejections, and unknown error types in middleware) depends on the error middleware catch-all capability, which is out of scope for the current phase (see PRD §4.2). In the current phase, the principle is upheld by compile-time enforcement (typed enum, Dylint rules) and the single `From<CanonicalError> for Problem` conversion path.
 
 ### 2.2 Constraints
 
@@ -305,6 +312,11 @@ async fn get_user(Path(id): Path<String>) -> Result<Json<User>, CanonicalError> 
 │  ┌─────────────────┐                            │
 │  │#[resource_error]│ proc macro                 │
 │  └─────────────────┘                            │
+├─────────────────────────────────────────────────┤
+│  dylint_lints/                                  │
+│  ┌─────────────────┐                            │
+│  │ Dylint Rules    │ compile-time lint           │
+│  └─────────────────┘                            │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -376,11 +388,11 @@ Only handles REST (HTTP). Does not handle gRPC or SSE. Does not add `trace_id` o
 
 Axum middleware that catches any `CanonicalError` returned from handlers, calls `Problem::from_error()` or `Problem::from_error_debug()` based on configuration, sets `trace_id` from the request span, sets `instance` from the request URI, and returns the `application/problem+json` response.
 
-Also catches panics and unhandled errors, wrapping them as `CanonicalError::internal(...)` with a generic message.
-
 **Responsibility boundaries**:
 
 Does not construct domain errors. Does not decide which category to use — that is the handler's job.
+
+> **Out of scope (current phase)**: Catch-all behavior (intercepting panics, unhandled rejections, and unknown error types and wrapping them as `CanonicalError::internal(...)`) depends on the foundation phase and is deferred per PRD §4.2.
 
 #### Resource Error Macro
 
@@ -396,6 +408,27 @@ The `#[resource_error("gts.cf.core.users.user.v1~")]` attribute macro on a unit 
 **Responsibility boundaries**:
 
 The macro is a code generator. It does not add new categories or context types. It does not perform any runtime logic beyond delegation to `CanonicalError` constructors.
+
+#### Dylint Rules
+
+- [ ] `p1` - **ID**: `cpt-cf-errors-component-dylint-rules`
+
+**Responsibility scope**:
+
+A set of Dylint lint rules (located in `dylint_lints/`) that enforce canonical error construction patterns at compile time. The rules detect and reject code that bypasses the canonical error system — e.g., constructing `Problem` directly, returning raw HTTP error responses, or using legacy error patterns (`Problem::new()`, `ErrDef`, `declare_errors!`, `ErrorCode`).
+
+**Rules**:
+1. **No direct `Problem` construction** — all `Problem` instances must originate from `CanonicalError` via the `From` impl
+2. **No legacy error patterns** — usage of `Problem::new()`, `ErrDef`, `declare_errors!`, or `ErrorCode` is flagged
+3. **No raw status-code error responses** — handlers must return `CanonicalError`, not ad-hoc HTTP error responses
+
+**Responsibility boundaries**:
+
+Dylint rules are static analysis only. They do not modify code, do not run at runtime, and do not define new error categories or context types.
+
+##### Related components (by ID)
+
+- `cpt-cf-errors-component-canonical-error` — the rules enforce that all errors flow through this type
 
 ### 3.3 API Contracts
 
@@ -427,7 +460,7 @@ The base error schema defines the common structure for all error categories.
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "gts://gts.cf.core.errors.err.v1~",
   "type": "object",
-  "required": ["type", "title", "status", "detail", "context"],
+  "required": ["type", "title", "status", "detail", "trace_id", "context"],
   "properties": {
     "type": {
       "type": "string",
@@ -444,6 +477,10 @@ The base error schema defines the common structure for all error categories.
     "detail": {
       "type": "string",
       "description": "Human-readable explanation of this error occurrence"
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "W3C trace ID for request correlation, injected by error middleware"
     },
     "context": {
       "type": "object",
@@ -718,6 +755,8 @@ async fn get_user(Path(id): Path<String>) -> Result<Json<User>, CanonicalError> 
 
 ### 3.8 Context Type Extensibility (`details` field)
 
+> **Out of scope**: Error extensibility rules are out of scope for the current phase (see PRD §4.2). This section documents the reserved extension point for future phases only. The `details` field MUST NOT be populated by any p1 code.
+
 Every context type carries an optional `details: Option<serde_json::Value>` field. In **p1 (current)** this field is always absent — it is reserved for future use.
 
 **Purpose**: `details` provides an open-ended extension point for error categories. Rather than extending the 16 base categories with new fields, callers can attach category-specific structured data without breaking the base schema.
@@ -743,7 +782,7 @@ Not applicable. Errors are transient in-memory values. No persistent storage.
 
 | Tier | When | Mechanism | What It Catches |
 |------|------|-----------|-----------------|
-| 1. Compile-time | `cargo build` | Typed enum variants, exhaustive `match`, `#[resource_error]` macro, `GtsSchema` const | Wrong context type, missing match arm, GTS typos |
+| 1. Compile-time | `cargo build` | Typed enum variants, exhaustive `match`, `#[resource_error]` macro, `GtsSchema` const, Dylint lint rules (`dylint_lints/`) | Wrong context type, missing match arm, GTS typos, direct `Problem` construction, legacy error patterns |
 | 2. Test-time | `cargo test` | Showcase tests with `assert_eq!` on full Problem JSON per category; JSON Schema equality assertions per context type | Field renames, default message changes, status code changes, schema drift |
 | 3. CI-time | PR merge gate | `cargo-semver-checks` on `cf-modkit-errors`; schema file diffing; snapshot CI gate | Removed types, changed signatures, schema evolution |
 | 4. Design-time | Architecture | Single `Problem` conversion point; dedicated context constructors; `GtsSchema` generates schemas from types | Ad-hoc JSON construction, missing required fields, schema/code divergence |
