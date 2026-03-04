@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.out_of_range.v1~`
 **HTTP Status**: 400
 **Title**: "Out of Range"
-**Context Type**: `Validation`
+**Context Type**: `OutOfRange`
 **Use When**: A value is syntactically valid but outside the acceptable range (e.g., page number beyond last page, negative quantity).
 **Similar Categories**: `invalid_argument` — bad format vs valid format but out of range
 **Default Message**: "Value out of range" (FieldViolations) or the format/constraint string
@@ -35,10 +35,10 @@ Field violation:
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, Validation};
+use cf_modkit_errors::{CanonicalError, OutOfRange};
 
 let err = CanonicalError::out_of_range(
-    Validation::constraint("Page 50 is beyond the last page (12)")
+    OutOfRange::constraint("Page 50 is beyond the last page (12)")
 );
 ```
 

@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.resource_exhausted.v1~`
 **HTTP Status**: 429
 **Title**: "Resource Exhausted"
-**Context Type**: `QuotaFailure`
+**Context Type**: `ResourceExhausted`
 **Use When**: A quota or rate limit was exceeded.
 **Similar Categories**: `service_unavailable` — system overload vs per-caller quota
 **Default Message**: "Quota exceeded"
@@ -28,10 +28,10 @@ Quota violation:
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, QuotaFailure, QuotaViolation};
+use cf_modkit_errors::{CanonicalError, ResourceExhausted, QuotaViolation};
 
 let err = CanonicalError::resource_exhausted(
-    QuotaFailure {
+    ResourceExhausted {
         violations: vec![
             QuotaViolation {
                 subject: "requests_per_minute".to_string(),

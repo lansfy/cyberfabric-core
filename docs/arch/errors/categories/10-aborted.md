@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.aborted.v1~`
 **HTTP Status**: 409
 **Title**: "Aborted"
-**Context Type**: `ErrorInfo`
+**Context Type**: `Aborted`
 **Use When**: The operation was aborted due to a concurrency conflict (optimistic locking failure, transaction conflict). The client can retry.
 **Similar Categories**: `already_exists` — duplicate on create vs conflict on update
 **Default Message**: "Operation aborted due to concurrency conflict"
@@ -15,13 +15,12 @@
 |-------|------|-------------|
 | `reason` | `String` | Machine-readable reason code (e.g., `OPTIMISTIC_LOCK_FAILURE`) |
 | `domain` | `String` | Logical grouping (e.g., `"cf.oagw"`) |
-| `metadata` | `HashMap<String, String>` | Arbitrary key-value pairs for additional context |
 | `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Rust Definitions and Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, ErrorInfo};
+use cf_modkit_errors::{CanonicalError, Aborted};
 use std::collections::HashMap;
 
 let mut metadata = HashMap::new();
@@ -29,7 +28,7 @@ metadata.insert("expected_version".to_string(), "3".to_string());
 metadata.insert("actual_version".to_string(), "5".to_string());
 
 let err = CanonicalError::aborted(
-    ErrorInfo::new("OPTIMISTIC_LOCK_FAILURE", "cf.oagw")
+    Aborted::new("OPTIMISTIC_LOCK_FAILURE", "cf.oagw")
         .with_metadata(metadata)
 );
 ```
@@ -52,7 +51,7 @@ let err = CanonicalError::aborted(
         "status": { "const": 409 },
         "context": {
           "type": "object",
-          "required": ["reason", "domain", "metadata"],
+          "required": ["reason", "domain"],
           "properties": {
             "resource_type": {
               "type": "string",
@@ -95,11 +94,7 @@ let err = CanonicalError::aborted(
   "context": {
     "resource_type": "gts.cf.oagw.upstreams.upstream.v1~",
     "reason": "OPTIMISTIC_LOCK_FAILURE",
-    "domain": "cf.oagw",
-    "metadata": {
-      "expected_version": "3",
-      "actual_version": "5"
-    }
+    "domain": "cf.oagw"
   }
 }
 ```

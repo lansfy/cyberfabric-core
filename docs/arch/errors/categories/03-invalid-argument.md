@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.invalid_argument.v1~`
 **HTTP Status**: 400
 **Title**: "Invalid Argument"
-**Context Type**: `Validation`
+**Context Type**: `InvalidArgument`
 **Use When**: The client sent an invalid request — malformed fields, bad format, or constraint violations. Independent of system state.
 **Similar Categories**: `out_of_range` — value is valid format but outside acceptable range; `failed_precondition` — request is valid but system state prevents it
 **Default Message**: "Request validation failed" (FieldViolations) or the format/constraint string
@@ -35,11 +35,11 @@ Field violation:
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, Validation, FieldViolation};
+use cf_modkit_errors::{CanonicalError, InvalidArgument, FieldViolation};
 
 // Field violations:
 let err = CanonicalError::invalid_argument(
-    Validation::fields(vec![
+    InvalidArgument::fields(vec![
         FieldViolation::new("email", "must be a valid email address", "INVALID_FORMAT"),
         FieldViolation::new("age", "must be at least 18", "OUT_OF_RANGE"),
     ])
@@ -47,7 +47,7 @@ let err = CanonicalError::invalid_argument(
 
 // Or format error:
 let err = CanonicalError::invalid_argument(
-    Validation::format("Request body must be valid JSON")
+    InvalidArgument::format("Request body must be valid JSON")
 );
 ```
 

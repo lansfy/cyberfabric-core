@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.already_exists.v1~`
 **HTTP Status**: 409
 **Title**: "Already Exists"
-**Context Type**: `ResourceInfo`
+**Context Type**: `AlreadyExists`
 **Use When**: The resource the client tried to create already exists.
 **Similar Categories**: `aborted` — concurrency conflict on update vs duplicate on create
 **Default Message**: "Resource already exists"
@@ -21,10 +21,10 @@
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, ResourceInfo};
+use cf_modkit_errors::{CanonicalError, AlreadyExists};
 
 let err = CanonicalError::already_exists(
-    ResourceInfo::new("gts.cf.core.users.user.v1~", "alice@example.com")
+    AlreadyExists::new("gts.cf.core.users.user.v1~", "alice@example.com")
         .with_description("User with this email already exists")
 );
 ```
