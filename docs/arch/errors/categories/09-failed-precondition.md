@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.failed_precondition.v1~`
 **HTTP Status**: 400
 **Title**: "Failed Precondition"
-**Context Type**: `PreconditionFailure`
+**Context Type**: `FailedPrecondition`
 **Use When**: The request is valid but the system is not in the required state to perform it (e.g., deleting a non-empty directory, operating on a resource in the wrong lifecycle state).
 **Similar Categories**: `invalid_argument` — request itself is bad vs system state prevents it
 **Default Message**: "Operation precondition not met"
@@ -29,10 +29,10 @@ Precondiion violation:
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, PreconditionFailure, PreconditionViolation};
+use cf_modkit_errors::{CanonicalError, FailedPrecondition, PreconditionViolation};
 
 let err = CanonicalError::failed_precondition(
-    PreconditionFailure {
+    FailedPrecondition {
         violations: vec![
             PreconditionViolation {
                 type_: "STATE".to_string(),

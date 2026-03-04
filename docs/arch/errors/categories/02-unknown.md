@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.unknown.v1~`
 **HTTP Status**: 500
 **Title**: "Unknown"
-**Context Type**: `DebugInfo`
+**Context Type**: `Unknown`
 **Use When**: An error occurred that does not match any other canonical category. Prefer a more specific category when possible.
 **Similar Categories**: `internal` — known infrastructure failure vs truly unknown error
 **Default Message**: Same as the `detail` parameter passed to the constructor.
@@ -13,17 +13,17 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `detail` | `String` | Human-readable debug message (generic in production) |
-| `stack_entries` | `Vec<String>` | Stack trace entries (empty in production) |
+| `description` | `String` | Human-readable debug message (generic in production) |
 | `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::CanonicalError;
+use cf_modkit_errors::{CanonicalError, Unknown};
 
-let err = CanonicalError::unknown("Unexpected response from payment provider");
-// Creates DebugInfo internally with the detail string
+let err = CanonicalError::unknown(
+    Unknown { description: "Unexpected response from payment provider".to_string() }
+);
 ```
 
 ## JSON Wire — JSON Schema
@@ -44,13 +44,13 @@ let err = CanonicalError::unknown("Unexpected response from payment provider");
         "status": { "const": 500 },
         "context": {
           "type": "object",
-          "required": ["detail", "stack_entries"],
+          "required": ["description", "stack_entries"],
           "properties": {
             "resource_type": {
               "type": "string",
               "description": "GTS type identifier of the associated resource (injected when resource_type is set)"
             },
-            "detail": {
+            "description": {
               "type": "string",
               "description": "Human-readable debug message (generic in production)"
             },
@@ -58,10 +58,6 @@ let err = CanonicalError::unknown("Unexpected response from payment provider");
               "type": "array",
               "items": { "type": "string" },
               "description": "Stack trace entries (empty in production)"
-            },
-            "details": {
-              "type": ["object", "null"],
-              "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }
           },
           "additionalProperties": false
@@ -79,9 +75,9 @@ let err = CanonicalError::unknown("Unexpected response from payment provider");
   "type": "gts://gts.cf.core.errors.err.v1~cf.core.err.unknown.v1~",
   "title": "Unknown",
   "status": 500,
-  "detail": "Unexpected response from payment provider",
+  "details": "Unexpected response from payment provider",
   "context": {
-    "detail": "Unexpected response from payment provider",
+    "description": "Unexpected response from payment provider",
     "stack_entries": []
   }
 }

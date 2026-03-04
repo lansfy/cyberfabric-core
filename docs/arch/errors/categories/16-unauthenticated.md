@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.unauthenticated.v1~`
 **HTTP Status**: 401
 **Title**: "Unauthenticated"
-**Context Type**: `ErrorInfo`
+**Context Type**: `Unauthenticated`
 **Use When**: The request does not have valid authentication credentials.
 **Similar Categories**: `permission_denied` — authenticated but insufficient permissions vs no valid credentials
 **Default Message**: "Authentication required"
@@ -17,20 +17,19 @@ GTS schema ID: `gts.cf.core.errors.error_info.v1~`
 |-------|------|-------------|
 | `reason` | `String` | Machine-readable reason code (e.g., `TOKEN_EXPIRED`, `MISSING_CREDENTIALS`) |
 | `domain` | `String` | Logical grouping (e.g., `"auth.cyberfabric.io"`) |
-| `metadata` | `HashMap<String, String>` | Arbitrary key-value pairs for additional context |
 | `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Rust Definitions and Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, ErrorInfo};
+use cf_modkit_errors::{CanonicalError, Unauthenticated};
 use std::collections::HashMap;
 
 let mut metadata = HashMap::new();
 metadata.insert("expires_at".to_string(), "2026-02-25T10:00:00Z".to_string());
 
 let err = CanonicalError::unauthenticated(
-    ErrorInfo::new("TOKEN_EXPIRED", "auth.cyberfabric.io")
+    Unauthenticated::new("TOKEN_EXPIRED", "auth.cyberfabric.io")
         .with_metadata(metadata)
 );
 ```
@@ -53,7 +52,7 @@ let err = CanonicalError::unauthenticated(
         "status": { "const": 401 },
         "context": {
           "type": "object",
-          "required": ["reason", "domain", "metadata"],
+          "required": ["reason", "domain"],
           "properties": {
             "resource_type": {
               "type": "string",
@@ -66,11 +65,6 @@ let err = CanonicalError::unauthenticated(
             "domain": {
               "type": "string",
               "description": "Logical grouping (e.g., auth.cyberfabric.io)"
-            },
-            "metadata": {
-              "type": "object",
-              "additionalProperties": { "type": "string" },
-              "description": "Arbitrary key-value pairs for additional context"
             },
             "details": {
               "type": ["object", "null"],
@@ -95,10 +89,7 @@ let err = CanonicalError::unauthenticated(
   "detail": "Authentication required",
   "context": {
     "reason": "TOKEN_EXPIRED",
-    "domain": "auth.cyberfabric.io",
-    "metadata": {
-      "expires_at": "2026-02-25T10:00:00Z"
-    }
+    "domain": "auth.cyberfabric.io"
   }
 }
 ```

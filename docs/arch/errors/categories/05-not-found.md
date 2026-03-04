@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.not_found.v1~`
 **HTTP Status**: 404
 **Title**: "Not Found"
-**Context Type**: `ResourceInfo`
+**Context Type**: `NotFound`
 **Use When**: The requested resource does not exist or was filtered out by access controls.
 **Similar Categories**: `permission_denied` — resource exists but caller lacks access; use `not_found` for DB-filtered 404 to avoid information leakage
 **Default Message**: "Resource not found"
@@ -21,11 +21,11 @@
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, ResourceInfo};
+use cf_modkit_errors::{CanonicalError, NotFound};
 
 // Direct construction:
 let err = CanonicalError::not_found(
-    ResourceInfo::new("gts.cf.core.users.user.v1~", "user-123")
+    NotFound::new("gts.cf.core.users.user.v1~", "user-123")
 );
 
 // Or via resource-scoped macro:

@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.cancelled.v1~`
 **HTTP Status**: 499 (Client Closed Request)
 **Title**: "Cancelled"
-**Context Type**: `RequestInfo`
+**Context Type**: `Canceled`
 **Use When**: The client cancelled the request before the server finished processing.
 **Similar Categories**: `deadline_exceeded` — server-side timeout, not client-initiated
 **Default Message**: "Operation cancelled by the client"
@@ -13,22 +13,18 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `request_id` | `String` | Identifier of the cancelled request |
 | `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, RequestInfo};
+use cf_modkit_errors::{CanonicalError, Canceled};
 
 let err = CanonicalError::cancelled(
-    RequestInfo { request_id: "01JREQ-DEF".to_string() }
+    Canceled { request_id: "01JREQ-DEF".to_string() }
 );
-// CanonicalError::cancelled uses RequestInfo as its context type.
-// resource_type and debug_info are optional; the minimal constructor sets both to None.
-// When resource_type is set via .with_resource_type("gts.cf..."), it is injected into
-// the wire context object during Problem mapping. The JSON example below shows an
-// optional resource_type present in context.
 ```
 
 ## JSON Wire — JSON Schema

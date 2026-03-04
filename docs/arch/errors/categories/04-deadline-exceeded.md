@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.deadline_exceeded.v1~`
 **HTTP Status**: 504
 **Title**: "Deadline Exceeded"
-**Context Type**: `RequestInfo`
+**Context Type**: `DeadlineExceeded`
 **Use When**: The server did not complete the operation within the allowed time.
 **Similar Categories**: `cancelled` — client-initiated cancellation, not server-side timeout
 **Default Message**: "Operation did not complete within the allowed time"
@@ -19,10 +19,10 @@
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, RequestInfo};
+use cf_modkit_errors::{CanonicalError, DeadlineExceeded};
 
 let err = CanonicalError::deadline_exceeded(
-    RequestInfo { request_id: "01JREQ-ABC".to_string() }
+    DeadlineExceeded { request_id: "01JREQ-ABC".to_string() }
 );
 ```
 

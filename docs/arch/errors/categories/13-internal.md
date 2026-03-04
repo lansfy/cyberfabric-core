@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.internal.v1~`
 **HTTP Status**: 500
 **Title**: "Internal"
-**Context Type**: `DebugInfo`
+**Context Type**: `Internal`
 **Use When**: A known infrastructure failure occurred (database error, serialization bug, etc.). The detail in production is generic; diagnostics are in logs via `trace_id`.
 **Similar Categories**: `unknown` — truly unknown error vs known infrastructure failure
 **Default Message**: "An internal error occurred. Please retry later."
@@ -20,14 +20,14 @@
 ## Rust Definitions and Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, DebugInfo};
+use cf_modkit_errors::{CanonicalError, Internal};
 
 // From a database error via ? operator:
 let user = db.find_user(&id).await?;  // DbErr auto-converts to CanonicalError::Internal
 
 // Or explicit construction:
 let err = CanonicalError::internal(
-    DebugInfo::new("Database connection pool exhausted")
+    Internal::new("Database connection pool exhausted")
 );
 ```
 
