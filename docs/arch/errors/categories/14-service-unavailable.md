@@ -14,7 +14,7 @@
 | Field | Type | Description |
 |-------|------|-------------|
 | `retry_after_seconds` | `u64` | Minimum seconds to wait before retrying |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Rust Definitions and Constructor Example
 
@@ -51,7 +51,7 @@ let err = CanonicalError::service_unavailable(
               "minimum": 0,
               "description": "Minimum seconds to wait before retrying"
             },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }

@@ -20,7 +20,6 @@ Canonical errors construction examples:
 let auth_err = CanonicalError::unauthenticated(ErrorInfo {
     reason: "TOKEN_EXPIRED".to_string(),
     domain: "auth.cyberfabric.io".to_string(),
-    metadata: HashMap::new(),
 });
 
 // 2. Library error propagation via ?
@@ -753,13 +752,13 @@ async fn get_user(Path(id): Path<String>) -> Result<Json<User>, CanonicalError> 
 // Middleware automatically adds trace_id and instance when converting to Problem
 ```
 
-### 3.8 Context Type Extensibility (`details` field)
+### 3.8 Context Type Extensibility (`extra` field)
 
-> **Out of scope**: Error extensibility rules are out of scope for the current phase (see PRD §4.2). This section documents the reserved extension point for future phases only. The `details` field MUST NOT be populated by any p1 code.
+> **Out of scope**: Error extensibility rules are out of scope for the current phase (see PRD §4.2). This section documents the reserved extension point for future phases only. The `extra` field MUST NOT be populated by any p1 code.
 
-Every context type carries an optional `details: Option<serde_json::Value>` field. In **p1 (current)** this field is always absent — it is reserved for future use.
+Every context type carries an optional `extra: Option<serde_json::Value>` field. In **p1 (current)** this field is always absent — it is reserved for future use.
 
-**Purpose**: `details` provides an open-ended extension point for error categories. Rather than extending the 16 base categories with new fields, callers can attach category-specific structured data without breaking the base schema.
+**Purpose**: `extra` provides an open-ended extension point for error categories. Rather than extending the 16 base categories with new fields, callers can attach category-specific structured data without breaking the base schema.
 
 **p3+ — Derived GTS types**: Future versions may allow a handler to attach a *derived* GTS type identifier to an error, effectively sub-typing the error for a specific domain. The GTS type chain expresses this derivation:
 
@@ -767,11 +766,11 @@ Every context type carries an optional `details: Option<serde_json::Value>` fiel
 gts.cf.core.errors.err.v1~cf.core.err.invalid_argument.v1~cf.scripting._.invalid_script_format.v1~
 ```
 
-The innermost segment (`cf.scripting._.invalid_script_format.v1~`) declares its own `details` schema — e.g., `{ "script_line": 42, "expected_token": ";" }` — while the parent segments remain fully backward-compatible. A client that understands only the base `invalid_argument` type safely ignores `details`; a client that recognises the innermost type can interpret it fully.
+The innermost segment (`cf.scripting._.invalid_script_format.v1~`) declares its own `extra` schema — e.g., `{ "script_line": 42, "expected_token": ";" }` — while the parent segments remain fully backward-compatible. A client that understands only the base `invalid_argument` type safely ignores `extra`; a client that recognises the innermost type can interpret it fully.
 
 Constraints:
-- `details` is always a JSON **object** or absent — never a scalar or array
-- Base context types never populate `details` directly (that is the derived type's responsibility)
+- `extra` is always a JSON **object** or absent — never a scalar or array
+- Base context types never populate `extra` directly (that is the derived type's responsibility)
 - The derived GTS type string MUST end with `~` and MUST be registered in the Types Registry
 
 ### 3.9 Database schemas & tables
@@ -975,7 +974,7 @@ All variants share the same structure: `{ ctx: ContextType, message: String, res
 - **Performance Architecture (PERF)**: Not applicable. Error construction is O(1) enum + struct allocation. No caching, pooling, or scaling concerns specific to the error system.
 - **Data Architecture (DATA)**: Not applicable. Errors are transient; no persistent storage.
 - **Operations (OPS)**: Not applicable. Error handling does not introduce deployment topology, infrastructure, or monitoring requirements beyond what the observability stack already provides.
-- **Compliance (COMPL)**: Flexible fields (`ErrorInfo.metadata`, `ResourceInfo.resource_name`, `FieldViolation.field`) may carry user-provided identifiers. Modules MUST apply data minimization when populating these fields. The `cpt-cf-errors-constraint-no-internal-details` constraint prevents stack traces and internal detail leakage in production, but does not address PII in context fields. PII handling in error responses follows the platform's data classification policy.
+- **Compliance (COMPL)**: Flexible fields (`ResourceInfo.resource_name`, `FieldViolation.field`) may carry user-provided identifiers. Modules MUST apply data minimization when populating these fields. The `cpt-cf-errors-constraint-no-internal-details` constraint prevents stack traces and internal detail leakage in production, but does not address PII in context fields. PII handling in error responses follows the platform's data classification policy.
 - **Usability (UX)**: Not applicable. This design covers the API error wire format, not user-facing error display.
 
 ## 6. Traceability

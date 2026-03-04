@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::CanonicalError;
 
@@ -6,7 +6,7 @@ use crate::error::CanonicalError;
 // Problem (RFC 9457)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Problem {
     #[serde(rename = "type")]
     pub problem_type: String,
@@ -18,37 +18,55 @@ pub struct Problem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
     pub context: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug: Option<serde_json::Value>,
 }
 
-impl From<CanonicalError> for Problem {
-    fn from(err: CanonicalError) -> Self {
-        let problem_type = err.gts_type().to_string();
-        let title = err.title().to_string();
+impl Problem {
+    /// Convert a `CanonicalError` to a `Problem`, omitting debug info (production mode).
+    #[must_use]
+    pub fn from_error(err: &CanonicalError) -> Self {
+        Self::build(err, false)
+    }
+
+    /// Convert a `CanonicalError` to a `Problem`, including debug info if present.
+    #[must_use]
+    pub fn from_error_debug(err: &CanonicalError) -> Self {
+        Self::build(err, true)
+    }
+
+    /// Set the `trace_id` field, returning `self` for chaining.
+    #[must_use]
+    pub fn with_trace_id(mut self, trace_id: impl Into<String>) -> Self {
+        self.trace_id = Some(trace_id.into());
+        self
+    }
+
+    /// Set the `instance` field, returning `self` for chaining.
+    #[must_use]
+    pub fn with_instance(mut self, instance: impl Into<String>) -> Self {
+        self.instance = Some(instance.into());
+        self
+    }
+
+    fn build(err: &CanonicalError, include_debug: bool) -> Self {
+        let problem_type = err.gts_type().to_owned();
+        let title = err.title().to_owned();
         let status = err.status_code();
-        let detail = err.message().to_string();
-        let mut context = match &err {
-            CanonicalError::Cancelled { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::Unknown { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::InvalidArgument { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::DeadlineExceeded { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::NotFound { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::AlreadyExists { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::PermissionDenied { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::ResourceExhausted { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::FailedPrecondition { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::Aborted { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::OutOfRange { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::Unimplemented { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::Internal { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::ServiceUnavailable { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::DataLoss { ctx, .. } => serde_json::to_value(ctx),
-            CanonicalError::Unauthenticated { ctx, .. } => serde_json::to_value(ctx),
-        }
-        .expect("context serialization should not fail");
+        let detail = err.message().to_owned();
+
+        let mut context = serialize_context(err);
 
         if let Some(rt) = err.resource_type() {
-            context["resource_type"] = serde_json::Value::String(rt.to_string());
+            context["resource_type"] = serde_json::Value::String(rt.to_owned());
         }
+
+        let debug = if include_debug {
+            err.debug_info()
+                .map(|d| serde_json::to_value(d).unwrap_or_default())
+        } else {
+            None
+        };
 
         Problem {
             problem_type,
@@ -58,6 +76,35 @@ impl From<CanonicalError> for Problem {
             instance: None,
             trace_id: None,
             context,
+            debug,
         }
+    }
+}
+
+fn serialize_context(err: &CanonicalError) -> serde_json::Value {
+    match err {
+        CanonicalError::Cancelled { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::Unknown { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::InvalidArgument { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::DeadlineExceeded { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::NotFound { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::AlreadyExists { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::PermissionDenied { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::ResourceExhausted { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::FailedPrecondition { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::Aborted { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::OutOfRange { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::Unimplemented { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::Internal { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::ServiceUnavailable { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::DataLoss { ctx, .. } => serde_json::to_value(ctx),
+        CanonicalError::Unauthenticated { ctx, .. } => serde_json::to_value(ctx),
+    }
+    .unwrap_or_default()
+}
+
+impl From<CanonicalError> for Problem {
+    fn from(err: CanonicalError) -> Self {
+        Problem::from_error(&err)
     }
 }

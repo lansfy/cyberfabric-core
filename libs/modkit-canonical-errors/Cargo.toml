@@ -11,14 +11,16 @@ readme = "README.md"
 keywords = ["cyberfabric", "cyberfabric-modkit"]
 categories = ["rust-patterns"]
 
+[lib]
+name = "cf_modkit_errors"
+
 [lints]
 workspace = true
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-modkit-canonical-errors-macros = { workspace = true }
+cf-modkit-errors-macros = { workspace = true }
+
+[dev-dependencies]
 gts-id = { workspace = true }
-gts-macros = { workspace = true }
-gts = { workspace = true }
-schemars = { workspace = true }
