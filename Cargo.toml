@@ -31,6 +31,8 @@ members = [
     "libs/modkit-db",
     "libs/modkit-db-macros",
     "libs/modkit-auth",
+    "libs/modkit-canonical-errors",
+    "libs/modkit-canonical-errors-macros",
     "libs/modkit-http",
     "libs/modkit-sdk",
     "libs/modkit-odata-macros",
@@ -225,6 +227,8 @@ modkit-odata-macros = { package = "cf-modkit-odata-macros", version = "0.5.10", 
 modkit-sdk = { package = "cf-modkit-sdk", version = "0.5.10", path = "libs/modkit-sdk" }
 modkit-security = { package = "cf-modkit-security", version = "0.5.10", path = "libs/modkit-security" }
 modkit-transport-grpc = { package = "cf-modkit-transport-grpc", version = "0.5.10", path = "libs/modkit-transport-grpc" }
+modkit-canonical-errors = { package = "cf-modkit-canonical-errors", version = "0.5.10", path = "libs/modkit-canonical-errors" }
+modkit-canonical-errors-macros = { package = "cf-modkit-canonical-errors-macros", version = "0.5.10", path = "libs/modkit-canonical-errors-macros" }
 modkit-utils = { package = "cf-modkit-utils", version = "0.5.10", path = "libs/modkit-utils" }
 
 cf-system-sdks = { version = "0.1.29", path = "libs/system-sdks" }
