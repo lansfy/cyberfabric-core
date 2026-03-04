@@ -1,13 +1,10 @@
 use std::fmt;
 
-use gts::schema::GtsSchema;
-
 use crate::context::{
-    DebugInfo, DebugInfoV1, ErrorInfo, ErrorInfoV1, PreconditionFailure, PreconditionFailureV1,
-    QuotaFailure, QuotaFailureV1, RequestInfo, RequestInfoV1, ResourceInfo, ResourceInfoV1,
-    RetryInfo, RetryInfoV1, Validation,
+    Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, DebugInfo, FailedPrecondition,
+    Internal, InvalidArgument, NotFound, OutOfRange, PermissionDenied, ResourceExhausted,
+    ServiceUnavailable, Unauthenticated, Unimplemented, Unknown,
 };
-use crate::kind::ErrorKind;
 
 // ---------------------------------------------------------------------------
 // CanonicalError Enum
@@ -16,234 +13,282 @@ use crate::kind::ErrorKind;
 #[derive(Debug, Clone)]
 pub enum CanonicalError {
     Cancelled {
-        ctx: RequestInfo,
+        ctx: Cancelled,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     Unknown {
-        ctx: DebugInfo,
+        ctx: Unknown,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     InvalidArgument {
-        ctx: Validation,
+        ctx: InvalidArgument,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     DeadlineExceeded {
-        ctx: RequestInfo,
+        ctx: DeadlineExceeded,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     NotFound {
-        ctx: ResourceInfo,
+        ctx: NotFound,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     AlreadyExists {
-        ctx: ResourceInfo,
+        ctx: AlreadyExists,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     PermissionDenied {
-        ctx: ErrorInfo,
+        ctx: PermissionDenied,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     ResourceExhausted {
-        ctx: QuotaFailure,
+        ctx: ResourceExhausted,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     FailedPrecondition {
-        ctx: PreconditionFailure,
+        ctx: FailedPrecondition,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     Aborted {
-        ctx: ErrorInfo,
+        ctx: Aborted,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     OutOfRange {
-        ctx: Validation,
+        ctx: OutOfRange,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     Unimplemented {
-        ctx: ErrorInfo,
+        ctx: Unimplemented,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     Internal {
-        ctx: DebugInfo,
+        ctx: Internal,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     ServiceUnavailable {
-        ctx: RetryInfo,
+        ctx: ServiceUnavailable,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     DataLoss {
-        ctx: ResourceInfo,
+        ctx: DataLoss,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
     Unauthenticated {
-        ctx: ErrorInfo,
+        ctx: Unauthenticated,
         message: String,
         resource_type: Option<String>,
+        debug_info: Option<DebugInfo>,
     },
 }
 
 impl CanonicalError {
     // --- Ergonomic constructors (one per category) ---
 
-    pub fn cancelled(ctx: RequestInfo) -> Self {
+    #[must_use]
+    pub fn cancelled(ctx: Cancelled) -> Self {
         Self::Cancelled {
             ctx,
             message: String::from("Operation cancelled by the client"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn unknown(detail: impl Into<String>) -> Self {
-        let detail = detail.into();
-        let message = detail.clone();
+    #[must_use]
+    pub fn unknown(ctx: Unknown) -> Self {
+        let message = ctx.description.clone();
         Self::Unknown {
-            ctx: DebugInfo::new(detail),
+            ctx,
             message,
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn invalid_argument(ctx: Validation) -> Self {
+    #[must_use]
+    pub fn invalid_argument(ctx: InvalidArgument) -> Self {
         let message = match &ctx {
-            Validation::FieldViolations { .. } => String::from("Request validation failed"),
-            Validation::Format { format } => format.clone(),
-            Validation::Constraint { constraint } => constraint.clone(),
+            InvalidArgument::FieldViolations { .. } => String::from("Request validation failed"),
+            InvalidArgument::Format { format } => format.clone(),
+            InvalidArgument::Constraint { constraint } => constraint.clone(),
         };
         Self::InvalidArgument {
             ctx,
             message,
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn deadline_exceeded(ctx: RequestInfo) -> Self {
+    #[must_use]
+    pub fn deadline_exceeded(ctx: DeadlineExceeded) -> Self {
         Self::DeadlineExceeded {
             ctx,
             message: String::from("Operation did not complete within the allowed time"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn not_found(ctx: ResourceInfo) -> Self {
+    #[must_use]
+    pub fn not_found(ctx: NotFound) -> Self {
         Self::NotFound {
             ctx,
             message: String::from("Resource not found"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn already_exists(ctx: ResourceInfo) -> Self {
+    #[must_use]
+    pub fn already_exists(ctx: AlreadyExists) -> Self {
         let message = ctx.description.clone();
         Self::AlreadyExists {
             ctx,
             message,
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn permission_denied(ctx: ErrorInfo) -> Self {
+    #[must_use]
+    pub fn permission_denied(ctx: PermissionDenied) -> Self {
         Self::PermissionDenied {
             ctx,
             message: String::from("You do not have permission to perform this operation"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn resource_exhausted(ctx: QuotaFailure) -> Self {
+    #[must_use]
+    pub fn resource_exhausted(ctx: ResourceExhausted) -> Self {
         Self::ResourceExhausted {
             ctx,
             message: String::from("Quota exceeded"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn failed_precondition(ctx: PreconditionFailure) -> Self {
+    #[must_use]
+    pub fn failed_precondition(ctx: FailedPrecondition) -> Self {
         Self::FailedPrecondition {
             ctx,
             message: String::from("Operation precondition not met"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn aborted(ctx: ErrorInfo) -> Self {
+    #[must_use]
+    pub fn aborted(ctx: Aborted) -> Self {
         Self::Aborted {
             ctx,
             message: String::from("Operation aborted due to concurrency conflict"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn out_of_range(ctx: Validation) -> Self {
+    #[must_use]
+    pub fn out_of_range(ctx: OutOfRange) -> Self {
         let message = match &ctx {
-            Validation::FieldViolations { .. } => String::from("Value out of range"),
-            Validation::Format { format } => format.clone(),
-            Validation::Constraint { constraint } => constraint.clone(),
+            OutOfRange::FieldViolations { .. } => String::from("Value out of range"),
+            OutOfRange::Format { format } => format.clone(),
+            OutOfRange::Constraint { constraint } => constraint.clone(),
         };
         Self::OutOfRange {
             ctx,
             message,
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn unimplemented(ctx: ErrorInfo) -> Self {
+    #[must_use]
+    pub fn unimplemented(ctx: Unimplemented) -> Self {
         Self::Unimplemented {
             ctx,
             message: String::from("This operation is not implemented"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn internal(ctx: DebugInfo) -> Self {
+    #[must_use]
+    pub fn internal(ctx: Internal) -> Self {
         Self::Internal {
             ctx,
             message: String::from("An internal error occurred. Please retry later."),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn service_unavailable(ctx: RetryInfo) -> Self {
+    #[must_use]
+    pub fn service_unavailable(ctx: ServiceUnavailable) -> Self {
         Self::ServiceUnavailable {
             ctx,
             message: String::from("Service temporarily unavailable"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn data_loss(ctx: ResourceInfo) -> Self {
+    #[must_use]
+    pub fn data_loss(ctx: DataLoss) -> Self {
         let message = ctx.description.clone();
         Self::DataLoss {
             ctx,
             message,
             resource_type: None,
+            debug_info: None,
         }
     }
 
-    pub fn unauthenticated(ctx: ErrorInfo) -> Self {
+    #[must_use]
+    pub fn unauthenticated(ctx: Unauthenticated) -> Self {
         Self::Unauthenticated {
             ctx,
             message: String::from("Authentication required"),
             resource_type: None,
+            debug_info: None,
         }
     }
 
     // --- Builder methods ---
 
+    #[must_use]
     pub fn with_message(mut self, msg: impl Into<String>) -> Self {
         let msg = msg.into();
         match &mut self {
@@ -267,6 +312,7 @@ impl CanonicalError {
         self
     }
 
+    #[must_use]
     pub fn with_resource_type(mut self, rt: impl Into<String>) -> Self {
         let rt = Some(rt.into());
         match &mut self {
@@ -290,8 +336,32 @@ impl CanonicalError {
         self
     }
 
+    #[must_use]
+    pub fn with_debug_info(mut self, info: DebugInfo) -> Self {
+        match &mut self {
+            Self::Cancelled { debug_info, .. }
+            | Self::Unknown { debug_info, .. }
+            | Self::InvalidArgument { debug_info, .. }
+            | Self::DeadlineExceeded { debug_info, .. }
+            | Self::NotFound { debug_info, .. }
+            | Self::AlreadyExists { debug_info, .. }
+            | Self::PermissionDenied { debug_info, .. }
+            | Self::ResourceExhausted { debug_info, .. }
+            | Self::FailedPrecondition { debug_info, .. }
+            | Self::Aborted { debug_info, .. }
+            | Self::OutOfRange { debug_info, .. }
+            | Self::Unimplemented { debug_info, .. }
+            | Self::Internal { debug_info, .. }
+            | Self::ServiceUnavailable { debug_info, .. }
+            | Self::DataLoss { debug_info, .. }
+            | Self::Unauthenticated { debug_info, .. } => *debug_info = Some(info),
+        }
+        self
+    }
+
     // --- Accessors ---
 
+    #[must_use]
     pub fn message(&self) -> &str {
         match self {
             Self::Cancelled { message, .. }
@@ -313,6 +383,7 @@ impl CanonicalError {
         }
     }
 
+    #[must_use]
     pub fn resource_type(&self) -> Option<&str> {
         match self {
             Self::Cancelled { resource_type, .. }
@@ -334,43 +405,112 @@ impl CanonicalError {
         }
     }
 
-    // --- ErrorKind & delegated metadata ---
-
-    pub fn kind(&self) -> ErrorKind {
+    #[must_use]
+    pub fn debug_info(&self) -> Option<&DebugInfo> {
         match self {
-            Self::Cancelled { .. } => ErrorKind::Cancelled,
-            Self::Unknown { .. } => ErrorKind::Unknown,
-            Self::InvalidArgument { .. } => ErrorKind::InvalidArgument,
-            Self::DeadlineExceeded { .. } => ErrorKind::DeadlineExceeded,
-            Self::NotFound { .. } => ErrorKind::NotFound,
-            Self::AlreadyExists { .. } => ErrorKind::AlreadyExists,
-            Self::PermissionDenied { .. } => ErrorKind::PermissionDenied,
-            Self::ResourceExhausted { .. } => ErrorKind::ResourceExhausted,
-            Self::FailedPrecondition { .. } => ErrorKind::FailedPrecondition,
-            Self::Aborted { .. } => ErrorKind::Aborted,
-            Self::OutOfRange { .. } => ErrorKind::OutOfRange,
-            Self::Unimplemented { .. } => ErrorKind::Unimplemented,
-            Self::Internal { .. } => ErrorKind::Internal,
-            Self::ServiceUnavailable { .. } => ErrorKind::ServiceUnavailable,
-            Self::DataLoss { .. } => ErrorKind::DataLoss,
-            Self::Unauthenticated { .. } => ErrorKind::Unauthenticated,
+            Self::Cancelled { debug_info, .. }
+            | Self::Unknown { debug_info, .. }
+            | Self::InvalidArgument { debug_info, .. }
+            | Self::DeadlineExceeded { debug_info, .. }
+            | Self::NotFound { debug_info, .. }
+            | Self::AlreadyExists { debug_info, .. }
+            | Self::PermissionDenied { debug_info, .. }
+            | Self::ResourceExhausted { debug_info, .. }
+            | Self::FailedPrecondition { debug_info, .. }
+            | Self::Aborted { debug_info, .. }
+            | Self::OutOfRange { debug_info, .. }
+            | Self::Unimplemented { debug_info, .. }
+            | Self::Internal { debug_info, .. }
+            | Self::ServiceUnavailable { debug_info, .. }
+            | Self::DataLoss { debug_info, .. }
+            | Self::Unauthenticated { debug_info, .. } => debug_info.as_ref(),
         }
     }
 
+    // --- Metadata accessors (direct match) ---
+
+    #[must_use]
     pub fn gts_type(&self) -> &'static str {
-        self.kind().gts_type()
+        match self {
+            Self::Cancelled { .. } => "gts.cf.core.errors.err.v1~cf.core.err.cancelled.v1~",
+            Self::Unknown { .. } => "gts.cf.core.errors.err.v1~cf.core.err.unknown.v1~",
+            Self::InvalidArgument { .. } => "gts.cf.core.errors.err.v1~cf.core.err.invalid_argument.v1~",
+            Self::DeadlineExceeded { .. } => "gts.cf.core.errors.err.v1~cf.core.err.deadline_exceeded.v1~",
+            Self::NotFound { .. } => "gts.cf.core.errors.err.v1~cf.core.err.not_found.v1~",
+            Self::AlreadyExists { .. } => "gts.cf.core.errors.err.v1~cf.core.err.already_exists.v1~",
+            Self::PermissionDenied { .. } => "gts.cf.core.errors.err.v1~cf.core.err.permission_denied.v1~",
+            Self::ResourceExhausted { .. } => "gts.cf.core.errors.err.v1~cf.core.err.resource_exhausted.v1~",
+            Self::FailedPrecondition { .. } => "gts.cf.core.errors.err.v1~cf.core.err.failed_precondition.v1~",
+            Self::Aborted { .. } => "gts.cf.core.errors.err.v1~cf.core.err.aborted.v1~",
+            Self::OutOfRange { .. } => "gts.cf.core.errors.err.v1~cf.core.err.out_of_range.v1~",
+            Self::Unimplemented { .. } => "gts.cf.core.errors.err.v1~cf.core.err.unimplemented.v1~",
+            Self::Internal { .. } => "gts.cf.core.errors.err.v1~cf.core.err.internal.v1~",
+            Self::ServiceUnavailable { .. } => "gts.cf.core.errors.err.v1~cf.core.err.service_unavailable.v1~",
+            Self::DataLoss { .. } => "gts.cf.core.errors.err.v1~cf.core.err.data_loss.v1~",
+            Self::Unauthenticated { .. } => "gts.cf.core.errors.err.v1~cf.core.err.unauthenticated.v1~",
+        }
     }
 
+    #[must_use]
     pub fn status_code(&self) -> u16 {
-        self.kind().status_code()
+        match self {
+            Self::InvalidArgument { .. }
+            | Self::FailedPrecondition { .. }
+            | Self::OutOfRange { .. } => 400,
+            Self::Unauthenticated { .. } => 401,
+            Self::PermissionDenied { .. } => 403,
+            Self::NotFound { .. } => 404,
+            Self::AlreadyExists { .. } | Self::Aborted { .. } => 409,
+            Self::ResourceExhausted { .. } => 429,
+            Self::Cancelled { .. } => 499,
+            Self::Unknown { .. } | Self::Internal { .. } | Self::DataLoss { .. } => 500,
+            Self::Unimplemented { .. } => 501,
+            Self::ServiceUnavailable { .. } => 503,
+            Self::DeadlineExceeded { .. } => 504,
+        }
     }
 
+    #[must_use]
     pub fn title(&self) -> &'static str {
-        self.kind().title()
+        match self {
+            Self::Cancelled { .. } => "Cancelled",
+            Self::Unknown { .. } => "Unknown",
+            Self::InvalidArgument { .. } => "Invalid Argument",
+            Self::DeadlineExceeded { .. } => "Deadline Exceeded",
+            Self::NotFound { .. } => "Not Found",
+            Self::AlreadyExists { .. } => "Already Exists",
+            Self::PermissionDenied { .. } => "Permission Denied",
+            Self::ResourceExhausted { .. } => "Resource Exhausted",
+            Self::FailedPrecondition { .. } => "Failed Precondition",
+            Self::Aborted { .. } => "Aborted",
+            Self::OutOfRange { .. } => "Out of Range",
+            Self::Unimplemented { .. } => "Unimplemented",
+            Self::Internal { .. } => "Internal",
+            Self::ServiceUnavailable { .. } => "Service Unavailable",
+            Self::DataLoss { .. } => "Data Loss",
+            Self::Unauthenticated { .. } => "Unauthenticated",
+        }
     }
 
     fn category_name(&self) -> &'static str {
-        self.kind().category_name()
+        match self {
+            Self::Cancelled { .. } => "cancelled",
+            Self::Unknown { .. } => "unknown",
+            Self::InvalidArgument { .. } => "invalid_argument",
+            Self::DeadlineExceeded { .. } => "deadline_exceeded",
+            Self::NotFound { .. } => "not_found",
+            Self::AlreadyExists { .. } => "already_exists",
+            Self::PermissionDenied { .. } => "permission_denied",
+            Self::ResourceExhausted { .. } => "resource_exhausted",
+            Self::FailedPrecondition { .. } => "failed_precondition",
+            Self::Aborted { .. } => "aborted",
+            Self::OutOfRange { .. } => "out_of_range",
+            Self::Unimplemented { .. } => "unimplemented",
+            Self::Internal { .. } => "internal",
+            Self::ServiceUnavailable { .. } => "service_unavailable",
+            Self::DataLoss { .. } => "data_loss",
+            Self::Unauthenticated { .. } => "unauthenticated",
+        }
     }
 }
 
@@ -381,45 +521,3 @@ impl fmt::Display for CanonicalError {
 }
 
 impl std::error::Error for CanonicalError {}
-
-impl GtsSchema for CanonicalError {
-    const SCHEMA_ID: &'static str = "gts.cf.core.errors.canonical_error.v1~";
-
-    fn gts_schema_with_refs() -> serde_json::Value {
-        let variant = |name: &str, ctx_ref: &str| {
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "category": { "const": name },
-                    "message": { "type": "string" },
-                    "resource_type": { "type": "string" },
-                    "context": { "$ref": ctx_ref }
-                },
-                "required": ["category", "message", "context"]
-            })
-        };
-
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.canonical_error.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "oneOf": [
-                variant("cancelled",          &format!("gts://{}", RequestInfoV1::SCHEMA_ID)),
-                variant("unknown",            &format!("gts://{}", DebugInfoV1::SCHEMA_ID)),
-                variant("invalid_argument",   &format!("gts://{}", Validation::SCHEMA_ID)),
-                variant("deadline_exceeded",   &format!("gts://{}", RequestInfoV1::SCHEMA_ID)),
-                variant("not_found",          &format!("gts://{}", ResourceInfoV1::SCHEMA_ID)),
-                variant("already_exists",     &format!("gts://{}", ResourceInfoV1::SCHEMA_ID)),
-                variant("permission_denied",  &format!("gts://{}", ErrorInfoV1::SCHEMA_ID)),
-                variant("resource_exhausted", &format!("gts://{}", QuotaFailureV1::SCHEMA_ID)),
-                variant("failed_precondition", &format!("gts://{}", PreconditionFailureV1::SCHEMA_ID)),
-                variant("aborted",            &format!("gts://{}", ErrorInfoV1::SCHEMA_ID)),
-                variant("out_of_range",       &format!("gts://{}", Validation::SCHEMA_ID)),
-                variant("unimplemented",      &format!("gts://{}", ErrorInfoV1::SCHEMA_ID)),
-                variant("internal",           &format!("gts://{}", DebugInfoV1::SCHEMA_ID)),
-                variant("unavailable",        &format!("gts://{}", RetryInfoV1::SCHEMA_ID)),
-                variant("data_loss",          &format!("gts://{}", ResourceInfoV1::SCHEMA_ID)),
-                variant("unauthenticated",    &format!("gts://{}", ErrorInfoV1::SCHEMA_ID))
-            ]
-        })
-    }
-}

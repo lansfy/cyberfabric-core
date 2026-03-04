@@ -1,40 +1,24 @@
-use std::collections::HashMap;
-
-use gts::schema::GtsSchema;
-use gts_macros::struct_to_gts_schema;
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
-// Context Types
+// Shared inner types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.field_violation.v1~",
-    description = "A single field validation violation",
-    properties = "field,description,reason"
-)]
-pub struct FieldViolationV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldViolation {
     pub field: String,
     pub description: String,
     pub reason: String,
 }
 
-pub type FieldViolation = FieldViolationV1;
-
-impl FieldViolationV1 {
+impl FieldViolation {
+    #[must_use]
     pub fn new(
         field: impl Into<String>,
         description: impl Into<String>,
         reason: impl Into<String>,
     ) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
             field: field.into(),
             description: description.into(),
             reason: reason.into(),
@@ -43,8 +27,78 @@ impl FieldViolationV1 {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct QuotaViolation {
+    pub subject: String,
+    pub description: String,
+}
+
+impl QuotaViolation {
+    #[must_use]
+    pub fn new(subject: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            subject: subject.into(),
+            description: description.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PreconditionViolation {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub subject: String,
+    pub description: String,
+}
+
+impl PreconditionViolation {
+    #[must_use]
+    pub fn new(
+        type_: impl Into<String>,
+        subject: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            type_: type_.into(),
+            subject: subject.into(),
+            description: description.into(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-category context types
+// ---------------------------------------------------------------------------
+
+// 01 Cancelled — context: Cancelled
+#[derive(Debug, Clone, Serialize)]
+pub struct Cancelled {}
+
+impl Cancelled {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+// 02 Unknown — context: Unknown
+#[derive(Debug, Clone, Serialize)]
+pub struct Unknown {
+    pub description: String,
+}
+
+impl Unknown {
+    #[must_use]
+    pub fn new(description: impl Into<String>) -> Self {
+        Self {
+            description: description.into(),
+        }
+    }
+}
+
+// 03 InvalidArgument — context: InvalidArgument (enum with 3 variants)
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-pub enum Validation {
+pub enum InvalidArgument {
     FieldViolations {
         field_violations: Vec<FieldViolation>,
     },
@@ -56,54 +110,20 @@ pub enum Validation {
     },
 }
 
-impl GtsSchema for Validation {
-    const SCHEMA_ID: &'static str = "gts.cf.core.errors.validation.v1~";
-
-    fn gts_schema_with_refs() -> serde_json::Value {
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.validation.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "oneOf": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "field_violations": {
-                            "type": "array",
-                            "items": { "$ref": "gts://gts.cf.core.errors.field_violation.v1~" }
-                        }
-                    },
-                    "required": ["field_violations"]
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "format": { "type": "string" }
-                    },
-                    "required": ["format"]
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "constraint": { "type": "string" }
-                    },
-                    "required": ["constraint"]
-                }
-            ]
-        })
-    }
-}
-
-impl Validation {
+impl InvalidArgument {
+    #[must_use]
     pub fn fields(violations: impl Into<Vec<FieldViolation>>) -> Self {
         Self::FieldViolations {
             field_violations: violations.into(),
         }
     }
 
+    #[must_use]
     pub fn format(msg: impl Into<String>) -> Self {
         Self::Format { format: msg.into() }
     }
 
+    #[must_use]
     pub fn constraint(msg: impl Into<String>) -> Self {
         Self::Constraint {
             constraint: msg.into(),
@@ -111,272 +131,286 @@ impl Validation {
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.resource_info.v1~",
-    description = "Resource identification context for resource-scoped errors",
-    properties = "resource_type,resource_name,description"
-)]
-pub struct ResourceInfoV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
+// 04 DeadlineExceeded — context: DeadlineExceeded
+#[derive(Debug, Clone, Serialize)]
+pub struct DeadlineExceeded {}
+
+impl DeadlineExceeded {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+// 05 NotFound — context: NotFound
+#[derive(Debug, Clone, Serialize)]
+pub struct NotFound {
     pub resource_type: String,
     pub resource_name: String,
     pub description: String,
 }
 
-pub type ResourceInfo = ResourceInfoV1;
-
-impl ResourceInfoV1 {
+impl NotFound {
+    #[must_use]
     pub fn new(resource_type: impl Into<String>, resource_name: impl Into<String>) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
             resource_type: resource_type.into(),
             resource_name: resource_name.into(),
             description: String::from("Resource not found"),
         }
     }
 
+    #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.error_info.v1~",
-    description = "Error information with reason, domain, and metadata",
-    properties = "reason,domain,metadata"
-)]
-pub struct ErrorInfoV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
-    pub reason: String,
-    pub domain: String,
-    pub metadata: HashMap<String, String>,
+// 06 AlreadyExists — context: AlreadyExists
+#[derive(Debug, Clone, Serialize)]
+pub struct AlreadyExists {
+    pub resource_type: String,
+    pub resource_name: String,
+    pub description: String,
 }
 
-pub type ErrorInfo = ErrorInfoV1;
-
-impl ErrorInfoV1 {
-    pub fn new(reason: impl Into<String>, domain: impl Into<String>) -> Self {
+impl AlreadyExists {
+    #[must_use]
+    pub fn new(resource_type: impl Into<String>, resource_name: impl Into<String>) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
-            reason: reason.into(),
-            domain: domain.into(),
-            metadata: HashMap::new(),
+            resource_type: resource_type.into(),
+            resource_name: resource_name.into(),
+            description: String::from("Resource already exists"),
         }
     }
 
-    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.metadata.insert(key.into(), value.into());
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
         self
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.quota_violation.v1~",
-    description = "A single quota violation entry",
-    properties = "subject,description"
-)]
-pub struct QuotaViolationV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
-    pub subject: String,
-    pub description: String,
+// 07 PermissionDenied — context: PermissionDenied
+#[derive(Debug, Clone, Serialize)]
+pub struct PermissionDenied {
+    pub reason: String,
+    pub domain: String,
 }
 
-pub type QuotaViolation = QuotaViolationV1;
-
-impl QuotaViolationV1 {
-    pub fn new(subject: impl Into<String>, description: impl Into<String>) -> Self {
+impl PermissionDenied {
+    #[must_use]
+    pub fn new(reason: impl Into<String>, domain: impl Into<String>) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
-            subject: subject.into(),
-            description: description.into(),
+            reason: reason.into(),
+            domain: domain.into(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.quota_failure.v1~",
-    description = "Quota failure with one or more violations",
-    properties = "violations"
-)]
-pub struct QuotaFailureV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
+// 08 ResourceExhausted — context: ResourceExhausted
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceExhausted {
     pub violations: Vec<QuotaViolation>,
 }
 
-pub type QuotaFailure = QuotaFailureV1;
-
-impl QuotaFailureV1 {
+impl ResourceExhausted {
+    #[must_use]
     pub fn new(violations: impl Into<Vec<QuotaViolation>>) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
             violations: violations.into(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.precondition_violation.v1~",
-    description = "A single precondition violation entry",
-    properties = "precondition_type,subject,description"
-)]
-pub struct PreconditionViolationV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
-    #[serde(rename = "type")]
-    pub precondition_type: String,
-    pub subject: String,
-    pub description: String,
-}
-
-pub type PreconditionViolation = PreconditionViolationV1;
-
-impl PreconditionViolationV1 {
-    pub fn new(
-        precondition_type: impl Into<String>,
-        subject: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
-        Self {
-            gts_type: Self::gts_schema_id().clone(),
-            precondition_type: precondition_type.into(),
-            subject: subject.into(),
-            description: description.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.precondition_failure.v1~",
-    description = "Precondition failure with one or more violations",
-    properties = "violations"
-)]
-pub struct PreconditionFailureV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
+// 09 FailedPrecondition — context: FailedPrecondition
+#[derive(Debug, Clone, Serialize)]
+pub struct FailedPrecondition {
     pub violations: Vec<PreconditionViolation>,
 }
 
-pub type PreconditionFailure = PreconditionFailureV1;
-
-impl PreconditionFailureV1 {
+impl FailedPrecondition {
+    #[must_use]
     pub fn new(violations: impl Into<Vec<PreconditionViolation>>) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
             violations: violations.into(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.debug_info.v1~",
-    description = "Debug information with detail and stack trace",
-    properties = "detail,stack_entries"
-)]
-pub struct DebugInfoV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
-    pub detail: String,
+// 10 Aborted — context: Aborted
+#[derive(Debug, Clone, Serialize)]
+pub struct Aborted {
+    pub reason: String,
+    pub domain: String,
+}
+
+impl Aborted {
+    #[must_use]
+    pub fn new(reason: impl Into<String>, domain: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            domain: domain.into(),
+        }
+    }
+}
+
+// 11 OutOfRange — context: OutOfRange (same variant structure as InvalidArgument)
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum OutOfRange {
+    FieldViolations {
+        field_violations: Vec<FieldViolation>,
+    },
+    Format {
+        format: String,
+    },
+    Constraint {
+        constraint: String,
+    },
+}
+
+impl OutOfRange {
+    #[must_use]
+    pub fn fields(violations: impl Into<Vec<FieldViolation>>) -> Self {
+        Self::FieldViolations {
+            field_violations: violations.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn format(msg: impl Into<String>) -> Self {
+        Self::Format { format: msg.into() }
+    }
+
+    #[must_use]
+    pub fn constraint(msg: impl Into<String>) -> Self {
+        Self::Constraint {
+            constraint: msg.into(),
+        }
+    }
+}
+
+// 12 Unimplemented — context: Unimplemented
+#[derive(Debug, Clone, Serialize)]
+pub struct Unimplemented {
+    pub reason: String,
+    pub domain: String,
+}
+
+impl Unimplemented {
+    #[must_use]
+    pub fn new(reason: impl Into<String>, domain: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            domain: domain.into(),
+        }
+    }
+}
+
+// 13 Internal — context: Internal
+#[derive(Debug, Clone, Serialize)]
+pub struct Internal {
+    pub message: String,
     pub stack_entries: Vec<String>,
 }
 
-pub type DebugInfo = DebugInfoV1;
-
-impl DebugInfoV1 {
-    pub fn new(detail: impl Into<String>) -> Self {
+impl Internal {
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
-            detail: detail.into(),
+            message: message.into(),
             stack_entries: Vec::new(),
         }
     }
 
+    #[must_use]
     pub fn with_stack(mut self, entries: impl Into<Vec<String>>) -> Self {
         self.stack_entries = entries.into();
         self
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.retry_info.v1~",
-    description = "Retry information for unavailable errors",
-    properties = "retry_after_seconds"
-)]
-pub struct RetryInfoV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
+// 14 ServiceUnavailable — context: ServiceUnavailable
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceUnavailable {
     pub retry_after_seconds: u64,
 }
 
-pub type RetryInfo = RetryInfoV1;
-
-impl RetryInfoV1 {
-    pub fn after_seconds(seconds: u64) -> Self {
+impl ServiceUnavailable {
+    #[must_use]
+    pub fn new(retry_after_seconds: u64) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
-            retry_after_seconds: seconds,
+            retry_after_seconds,
         }
     }
 }
 
-#[derive(Debug, Clone)]
-#[struct_to_gts_schema(
-    dir_path = "schemas",
-    base = true,
-    schema_id = "gts.cf.core.errors.request_info.v1~",
-    description = "Request identification context",
-    properties = "request_id"
-)]
-pub struct RequestInfoV1 {
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    gts_type: gts::GtsSchemaId,
-    pub request_id: String,
+// 15 DataLoss — context: DataLoss
+#[derive(Debug, Clone, Serialize)]
+pub struct DataLoss {
+    pub resource_type: String,
+    pub resource_name: String,
+    pub description: String,
 }
 
-pub type RequestInfo = RequestInfoV1;
-
-impl RequestInfoV1 {
-    pub fn new(request_id: impl Into<String>) -> Self {
+impl DataLoss {
+    #[must_use]
+    pub fn new(resource_type: impl Into<String>, resource_name: impl Into<String>) -> Self {
         Self {
-            gts_type: Self::gts_schema_id().clone(),
-            request_id: request_id.into(),
+            resource_type: resource_type.into(),
+            resource_name: resource_name.into(),
+            description: String::from("Data loss detected"),
         }
+    }
+
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+}
+
+// 16 Unauthenticated — context: Unauthenticated
+#[derive(Debug, Clone, Serialize)]
+pub struct Unauthenticated {
+    pub reason: String,
+    pub domain: String,
+}
+
+impl Unauthenticated {
+    #[must_use]
+    pub fn new(reason: impl Into<String>, domain: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            domain: domain.into(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DebugInfo — attached to CanonicalError as an optional envelope field
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DebugInfo {
+    pub detail: String,
+    pub stack_entries: Vec<String>,
+}
+
+impl DebugInfo {
+    #[must_use]
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            stack_entries: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_stack(mut self, entries: impl Into<Vec<String>>) -> Self {
+        self.stack_entries = entries.into();
+        self
     }
 }

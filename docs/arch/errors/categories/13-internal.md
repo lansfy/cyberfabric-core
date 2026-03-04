@@ -13,9 +13,8 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `message` | `String` | Human-readable debug message (generic in production) |
-| `stack_entries` | `Vec<String>` | Stack trace entries (empty in production) |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `description` | `String` | Human-readable debug message (generic in production) |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Rust Definitions and Constructor Example
 
@@ -49,22 +48,13 @@ let err = CanonicalError::internal(
         "status": { "const": 500 },
         "context": {
           "type": "object",
-          "required": ["message", "stack_entries"],
+          "required": ["description"],
           "properties": {
-            "resource_type": {
-              "type": "string",
-              "description": "GTS type identifier of the associated resource (injected when resource_type is set)"
-            },
-            "message": {
+            "description": {
               "type": "string",
               "description": "Human-readable debug message (generic in production)"
             },
-            "stack_entries": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Stack trace entries (empty in production)"
-            },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }
@@ -86,9 +76,7 @@ let err = CanonicalError::internal(
   "status": 500,
   "detail": "An internal error occurred. Please retry later.",
   "context": {
-    "resource_type": "gts.cf.core.tenants.tenant.v1~",
-    "message": "An internal error occurred. Please retry later.",
-    "stack_entries": []
+    "description": "An internal error occurred. Please retry later."
   }
 }
 ```

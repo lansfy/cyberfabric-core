@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.cancelled.v1~`
 **HTTP Status**: 499 (Client Closed Request)
 **Title**: "Cancelled"
-**Context Type**: `Canceled`
+**Context Type**: `Cancelled`
 **Use When**: The client cancelled the request before the server finished processing.
 **Similar Categories**: `deadline_exceeded` — server-side timeout, not client-initiated
 **Default Message**: "Operation cancelled by the client"
@@ -13,18 +13,15 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `request_id` | `String` | Identifier of the cancelled request |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, Canceled};
+use cf_modkit_errors::{CanonicalError, Cancelled};
 
-let err = CanonicalError::cancelled(
-    Canceled { request_id: "01JREQ-DEF".to_string() }
-);
+let err = CanonicalError::cancelled(Cancelled::new());
 ```
 
 ## JSON Wire — JSON Schema
@@ -45,17 +42,12 @@ let err = CanonicalError::cancelled(
         "status": { "const": 499 },
         "context": {
           "type": "object",
-          "required": ["request_id"],
           "properties": {
             "resource_type": {
               "type": "string",
               "description": "GTS type identifier of the associated resource (injected when resource_type is set)"
             },
-            "request_id": {
-              "type": "string",
-              "description": "Identifier of the cancelled request"
-            },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }
@@ -77,8 +69,7 @@ let err = CanonicalError::cancelled(
   "status": 499,
   "detail": "Operation cancelled by the client",
   "context": {
-    "resource_type": "gts.cf.oagw.upstreams.upstream.v1~",
-    "request_id": "01JREQ-DEF"
+    "resource_type": "gts.cf.oagw.upstreams.upstream.v1~"
   }
 }
 ```

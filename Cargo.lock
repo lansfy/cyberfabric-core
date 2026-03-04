@@ -1393,10 +1393,7 @@ name = "cf-modkit-canonical-errors"
 version = "0.5.2"
 dependencies = [
  "cf-modkit-canonical-errors-macros",
- "gts",
  "gts-id",
- "gts-macros",
- "schemars 1.2.1",
  "serde",
  "serde_json",
 ]
@@ -1405,6 +1402,7 @@ dependencies = [
 name = "cf-modkit-canonical-errors-macros"
 version = "0.5.2"
 dependencies = [
+ "gts-id",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

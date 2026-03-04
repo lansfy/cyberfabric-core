@@ -15,7 +15,7 @@
 |-------|------|-------------|
 | `reason` | `String` | Machine-readable reason code (e.g., `GRPC_ROUTING`) |
 | `domain` | `String` | Logical grouping (e.g., `"cf.oagw"`) |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Constructor Example
 
@@ -59,7 +59,7 @@ let err = CanonicalError::unimplemented(
               "type": "string",
               "description": "Logical grouping (e.g., cf.oagw)"
             },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }

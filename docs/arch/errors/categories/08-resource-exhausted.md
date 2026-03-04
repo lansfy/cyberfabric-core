@@ -16,7 +16,7 @@ Quota failure:
 | Field | Type | Description |
 |-------|------|-------------|
 | `violations` | `Vec<QuotaViolation>` | List of quota violations |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 Quota violation:
 
@@ -31,14 +31,12 @@ Quota violation:
 use cf_modkit_errors::{CanonicalError, ResourceExhausted, QuotaViolation};
 
 let err = CanonicalError::resource_exhausted(
-    ResourceExhausted {
-        violations: vec![
-            QuotaViolation {
-                subject: "requests_per_minute".to_string(),
-                description: "Limit of 100 requests per minute exceeded".to_string(),
-            }
-        ]
-    }
+    ResourceExhausted::new(vec![
+        QuotaViolation::new(
+            "requests_per_minute",
+            "Limit of 100 requests per minute exceeded",
+        )
+    ])
 );
 ```
 
@@ -66,7 +64,7 @@ let err = CanonicalError::resource_exhausted(
               "type": "array",
               "items": { "$ref": "#/$defs/QuotaViolation" }
             },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }
