@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.unimplemented.v1~`
 **HTTP Status**: 501
 **Title**: "Unimplemented"
-**Context Type**: `ErrorInfo`
+**Context Type**: `Unimplemented`
 **Use When**: The requested operation is recognized but not implemented (e.g., a planned feature, an unsupported protocol variant).
 **Similar Categories**: `internal` — bug vs intentionally unimplemented
 **Default Message**: "This operation is not implemented"
@@ -15,16 +15,15 @@
 |-------|------|-------------|
 | `reason` | `String` | Machine-readable reason code (e.g., `GRPC_ROUTING`) |
 | `domain` | `String` | Logical grouping (e.g., `"cf.oagw"`) |
-| `metadata` | `HashMap<String, String>` | Arbitrary key-value pairs for additional context |
 | `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, ErrorInfo};
+use cf_modkit_errors::{CanonicalError, Unimplemented};
 
 let err = CanonicalError::unimplemented(
-    ErrorInfo::new("GRPC_ROUTING", "cf.oagw")
+    Unimplemented::new("GRPC_ROUTING", "cf.oagw")
 );
 ```
 
@@ -46,7 +45,7 @@ let err = CanonicalError::unimplemented(
         "status": { "const": 501 },
         "context": {
           "type": "object",
-          "required": ["reason", "domain", "metadata"],
+          "required": ["reason", "domain"],
           "properties": {
             "resource_type": {
               "type": "string",
@@ -59,11 +58,6 @@ let err = CanonicalError::unimplemented(
             "domain": {
               "type": "string",
               "description": "Logical grouping (e.g., cf.oagw)"
-            },
-            "metadata": {
-              "type": "object",
-              "additionalProperties": { "type": "string" },
-              "description": "Arbitrary key-value pairs for additional context"
             },
             "details": {
               "type": ["object", "null"],
@@ -89,8 +83,7 @@ let err = CanonicalError::unimplemented(
   "context": {
     "resource_type": "gts.cf.oagw.upstreams.upstream.v1~",
     "reason": "GRPC_ROUTING",
-    "domain": "cf.oagw",
-    "metadata": {}
+    "domain": "cf.oagw"
   }
 }
 ```

@@ -4,7 +4,7 @@
 **GTS ID**: `gts.cf.core.errors.err.v1~cf.core.err.data_loss.v1~`
 **HTTP Status**: 500
 **Title**: "Data Loss"
-**Context Type**: `ResourceInfo`
+**Context Type**: `DataLoss`
 **Use When**: Unrecoverable data loss or corruption detected.
 **Similar Categories**: `internal` — transient infrastructure failure vs permanent data loss
 **Default Message**: "Data loss detected"
@@ -21,10 +21,10 @@
 ## Constructor Example
 
 ```rust
-use cf_modkit_errors::{CanonicalError, ResourceInfo};
+use cf_modkit_errors::{CanonicalError, DataLoss};
 
 let err = CanonicalError::data_loss(
-    ResourceInfo::new("gts.cf.core.files.file.v1~", "01JFILE-ABC")
+    DataLoss::new("gts.cf.core.files.file.v1~", "01JFILE-ABC")
         .with_description("Checksum mismatch detected")
 );
 
