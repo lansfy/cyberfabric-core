@@ -16,7 +16,7 @@ Precondition failure:
 | Field | Type | Description |
 |-------|------|-------------|
 | `violations` | `Vec<PreconditionViolation>` | List of precondition violations |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 Precondiion violation:
 
@@ -72,7 +72,7 @@ let err = CanonicalError::failed_precondition(
               "type": "array",
               "items": { "$ref": "#/$defs/PreconditionViolation" }
             },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }

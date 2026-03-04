@@ -15,7 +15,7 @@
 |-------|------|-------------|
 | `reason` | `String` | Machine-readable reason code (e.g., `OPTIMISTIC_LOCK_FAILURE`) |
 | `domain` | `String` | Logical grouping (e.g., `"cf.oagw"`) |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Rust Definitions and Constructor Example
 
@@ -23,13 +23,8 @@
 use cf_modkit_errors::{CanonicalError, Aborted};
 use std::collections::HashMap;
 
-let mut metadata = HashMap::new();
-metadata.insert("expected_version".to_string(), "3".to_string());
-metadata.insert("actual_version".to_string(), "5".to_string());
-
 let err = CanonicalError::aborted(
     Aborted::new("OPTIMISTIC_LOCK_FAILURE", "cf.oagw")
-        .with_metadata(metadata)
 );
 ```
 
@@ -53,10 +48,6 @@ let err = CanonicalError::aborted(
           "type": "object",
           "required": ["reason", "domain"],
           "properties": {
-            "resource_type": {
-              "type": "string",
-              "description": "GTS type identifier of the associated resource (injected when resource_type is set)"
-            },
             "reason": {
               "type": "string",
               "description": "Machine-readable reason code (e.g., OPTIMISTIC_LOCK_FAILURE)"
@@ -65,12 +56,7 @@ let err = CanonicalError::aborted(
               "type": "string",
               "description": "Logical grouping (e.g., cf.oagw)"
             },
-            "metadata": {
-              "type": "object",
-              "additionalProperties": { "type": "string" },
-              "description": "Arbitrary key-value pairs for additional context"
-            },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }

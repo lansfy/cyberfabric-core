@@ -13,17 +13,14 @@
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `request_id` | `String` | Identifier of the timed-out request |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Constructor Example
 
 ```rust
 use cf_modkit_errors::{CanonicalError, DeadlineExceeded};
 
-let err = CanonicalError::deadline_exceeded(
-    DeadlineExceeded { request_id: "01JREQ-ABC".to_string() }
-);
+let err = CanonicalError::deadline_exceeded(DeadlineExceeded::new());
 ```
 
 ## JSON Wire — JSON Schema
@@ -44,17 +41,12 @@ let err = CanonicalError::deadline_exceeded(
         "status": { "const": 504 },
         "context": {
           "type": "object",
-          "required": ["request_id"],
           "properties": {
             "resource_type": {
               "type": "string",
               "description": "GTS type identifier of the associated resource (injected when resource_type is set)"
             },
-            "request_id": {
-              "type": "string",
-              "description": "Identifier of the timed-out request"
-            },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }
@@ -76,8 +68,7 @@ let err = CanonicalError::deadline_exceeded(
   "status": 504,
   "detail": "Operation did not complete within the allowed time",
   "context": {
-    "resource_type": "gts.cf.core.users.user.v1~",
-    "request_id": "01JREQ-ABC"
+    "resource_type": "gts.cf.core.users.user.v1~"
   }
 }
 ```

@@ -13,12 +13,12 @@
 
 **Variant: FieldViolations**
 
-Validation:
+InvalidArgument:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `field_violations` | `Vec<FieldViolation>` | List of per-field validation errors |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 Field violation:
 
@@ -28,9 +28,19 @@ Field violation:
 | `description` | `String` | Human-readable explanation |
 | `reason` | `String` | Machine-readable reason code (`REQUIRED`, `INVALID_FORMAT`, etc.) |
 
-**Variant: Format** — `{ "format": "<message>", "details": null }`
+**Variant: Format**
 
-**Variant: Constraint** — `{ "constraint": "<message>", "details": null }`
+| Field | Type | Description |
+|-------|------|-------------|
+| `format` | `String` | Human-readable format error message |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+
+**Variant: Constraint**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `constraint` | `String` | Human-readable constraint violation message |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Constructor Example
 
@@ -78,7 +88,7 @@ let err = CanonicalError::invalid_argument(
                   "type": "array",
                   "items": { "$ref": "#/$defs/FieldViolation" }
                 },
-                "details": { "type": ["object", "null"] }
+                "extra": { "type": ["object", "null"] }
               },
               "additionalProperties": false
             },
@@ -88,7 +98,7 @@ let err = CanonicalError::invalid_argument(
               "properties": {
                 "resource_type": { "type": "string" },
                 "format": { "type": "string" },
-                "details": { "type": ["object", "null"] }
+                "extra": { "type": ["object", "null"] }
               },
               "additionalProperties": false
             },
@@ -98,7 +108,7 @@ let err = CanonicalError::invalid_argument(
               "properties": {
                 "resource_type": { "type": "string" },
                 "constraint": { "type": "string" },
-                "details": { "type": ["object", "null"] }
+                "extra": { "type": ["object", "null"] }
               },
               "additionalProperties": false
             }

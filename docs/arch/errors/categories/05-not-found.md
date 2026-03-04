@@ -16,7 +16,7 @@
 | `resource_type` | `String` | GTS type identifier of the resource |
 | `resource_name` | `String` | Identifier of the missing resource |
 | `description` | `String` | Human-readable explanation |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Constructor Example
 
@@ -68,7 +68,7 @@ let err = UserResourceError::not_found("user-123");
               "type": "string",
               "description": "Human-readable explanation"
             },
-            "details": {
+            "extra": {
               "type": ["object", "null"],
               "description": "Reserved for derived GTS type extensions (p3+); absent in p1"
             }

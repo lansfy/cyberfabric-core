@@ -1,406 +1,212 @@
-extern crate cf_modkit_canonical_errors as modkit_canonical_errors;
+extern crate cf_modkit_errors;
 
-use modkit_canonical_errors::{
-    DebugInfoV1, ErrorInfoV1, FieldViolation, FieldViolationV1, PreconditionFailureV1,
-    PreconditionViolationV1, QuotaFailureV1, QuotaViolationV1, RequestInfoV1, ResourceInfoV1,
-    RetryInfoV1, Validation,
+use cf_modkit_errors::{
+    Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, DebugInfo, FailedPrecondition,
+    FieldViolation, Internal, InvalidArgument, NotFound, OutOfRange, PermissionDenied,
+    PreconditionViolation, QuotaViolation, ResourceExhausted, ServiceUnavailable, Unauthenticated,
+    Unimplemented, Unknown,
 };
 
+// =========================================================================
+// Shared inner types
+// =========================================================================
+
 #[test]
-fn validation_field_violations_serialization() {
-    let v = Validation::fields(vec![FieldViolation::new(
+fn field_violation_serialization() {
+    let v = FieldViolation::new("email", "must be valid", "INVALID_FORMAT");
+    let json = serde_json::to_value(&v).unwrap();
+    assert_eq!(json["field"], "email");
+    assert_eq!(json["description"], "must be valid");
+    assert_eq!(json["reason"], "INVALID_FORMAT");
+}
+
+#[test]
+fn quota_violation_serialization() {
+    let v = QuotaViolation::new("requests_per_minute", "Limit exceeded");
+    let json = serde_json::to_value(&v).unwrap();
+    assert_eq!(json["subject"], "requests_per_minute");
+    assert_eq!(json["description"], "Limit exceeded");
+}
+
+#[test]
+fn precondition_violation_serialization() {
+    let v = PreconditionViolation::new("STATE", "tenant.users", "Must have zero users");
+    let json = serde_json::to_value(&v).unwrap();
+    assert_eq!(json["type"], "STATE");
+    assert_eq!(json["subject"], "tenant.users");
+    assert_eq!(json["description"], "Must have zero users");
+}
+
+// =========================================================================
+// Per-category context serialization tests
+// =========================================================================
+
+#[test]
+fn cancelled_serialization() {
+    let ctx = Cancelled::new();
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert!(json.is_object());
+}
+
+#[test]
+fn unknown_serialization() {
+    let ctx = Unknown::new("something went wrong");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["description"], "something went wrong");
+}
+
+#[test]
+fn invalid_argument_field_violations_serialization() {
+    let ctx = InvalidArgument::fields(vec![FieldViolation::new(
         "email",
         "must be valid",
         "INVALID_FORMAT",
     )]);
-    let json = serde_json::to_value(&v).unwrap();
+    let json = serde_json::to_value(&ctx).unwrap();
     assert!(json["field_violations"].is_array());
     assert_eq!(json["field_violations"][0]["field"], "email");
 }
 
 #[test]
-fn validation_format_serialization() {
-    let v = Validation::format("bad json");
-    let json = serde_json::to_value(&v).unwrap();
+fn invalid_argument_format_serialization() {
+    let ctx = InvalidArgument::format("bad json");
+    let json = serde_json::to_value(&ctx).unwrap();
     assert_eq!(json["format"], "bad json");
 }
 
 #[test]
-fn validation_constraint_serialization() {
-    let v = Validation::constraint("too many items");
-    let json = serde_json::to_value(&v).unwrap();
+fn invalid_argument_constraint_serialization() {
+    let ctx = InvalidArgument::constraint("too many items");
+    let json = serde_json::to_value(&ctx).unwrap();
     assert_eq!(json["constraint"], "too many items");
 }
 
-// =========================================================================
-// GTS Schema tests — full JSON comparison for each context type
-// =========================================================================
-
 #[test]
-fn schema_retry_info_v1() {
-    use gts::schema::GtsSchema;
-    let schema = RetryInfoV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.retry_info.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "retry_after_seconds"],
-            "properties": {
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "retry_after_seconds": {
-                    "format": "uint64",
-                    "minimum": 0,
-                    "type": "integer"
-                }
-            }
-        })
-    );
+fn deadline_exceeded_serialization() {
+    let ctx = DeadlineExceeded::new();
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert!(json.is_object());
 }
 
 #[test]
-fn schema_request_info_v1() {
-    use gts::schema::GtsSchema;
-    let schema = RequestInfoV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.request_info.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "request_id"],
-            "properties": {
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "request_id": {
-                    "type": "string"
-                }
-            }
-        })
-    );
+fn not_found_serialization() {
+    let ctx = NotFound::new("gts.cf.core.users.user.v1", "user-123");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["resource_type"], "gts.cf.core.users.user.v1");
+    assert_eq!(json["resource_name"], "user-123");
+    assert_eq!(json["description"], "Resource not found");
 }
 
 #[test]
-fn schema_resource_info_v1() {
-    use gts::schema::GtsSchema;
-    let schema = ResourceInfoV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.resource_info.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "resource_type", "resource_name", "description"],
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "resource_name": {
-                    "type": "string"
-                },
-                "resource_type": {
-                    "type": "string"
-                }
-            }
-        })
-    );
+fn already_exists_serialization() {
+    let ctx = AlreadyExists::new("gts.cf.core.users.user.v1", "alice@example.com");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["resource_type"], "gts.cf.core.users.user.v1");
+    assert_eq!(json["resource_name"], "alice@example.com");
+    assert_eq!(json["description"], "Resource already exists");
 }
 
 #[test]
-fn schema_error_info_v1() {
-    use gts::schema::GtsSchema;
-    let schema = ErrorInfoV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.error_info.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "reason", "domain", "metadata"],
-            "properties": {
-                "domain": {
-                    "type": "string"
-                },
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "metadata": {
-                    "additionalProperties": {
-                        "type": "string"
-                    },
-                    "type": "object"
-                },
-                "reason": {
-                    "type": "string"
-                }
-            }
-        })
-    );
+fn permission_denied_serialization() {
+    let ctx = PermissionDenied::new("CROSS_TENANT_ACCESS", "auth.cyberfabric.io");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["reason"], "CROSS_TENANT_ACCESS");
+    assert_eq!(json["domain"], "auth.cyberfabric.io");
 }
 
 #[test]
-fn schema_field_violation_v1() {
-    use gts::schema::GtsSchema;
-    let schema = FieldViolationV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.field_violation.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "field", "description", "reason"],
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "field": {
-                    "type": "string"
-                },
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "reason": {
-                    "type": "string"
-                }
-            }
-        })
-    );
+fn resource_exhausted_serialization() {
+    let ctx = ResourceExhausted::new(vec![QuotaViolation::new("rpm", "exceeded")]);
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert!(json["violations"].is_array());
+    assert_eq!(json["violations"][0]["subject"], "rpm");
 }
 
 #[test]
-fn schema_debug_info_v1() {
-    use gts::schema::GtsSchema;
-    let schema = DebugInfoV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.debug_info.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "detail", "stack_entries"],
-            "properties": {
-                "detail": {
-                    "type": "string"
-                },
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "stack_entries": {
-                    "items": {
-                        "type": "string"
-                    },
-                    "type": "array"
-                }
-            }
-        })
-    );
+fn failed_precondition_serialization() {
+    let ctx = FailedPrecondition::new(vec![PreconditionViolation::new("STATE", "s", "d")]);
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert!(json["violations"].is_array());
 }
 
 #[test]
-fn schema_quota_violation_v1() {
-    use gts::schema::GtsSchema;
-    let schema = QuotaViolationV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.quota_violation.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "subject", "description"],
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "subject": {
-                    "type": "string"
-                }
-            }
-        })
-    );
+fn aborted_serialization() {
+    let ctx = Aborted::new("LOCK", "cf");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["reason"], "LOCK");
+    assert_eq!(json["domain"], "cf");
 }
 
 #[test]
-fn schema_quota_failure_v1() {
-    use gts::schema::GtsSchema;
-    let schema = QuotaFailureV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.quota_failure.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "violations"],
-            "properties": {
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "violations": {
-                    "items": {
-                        "$ref": "#/$defs/QuotaViolationV1"
-                    },
-                    "type": "array"
-                }
-            }
-        })
-    );
+fn out_of_range_field_violations_serialization() {
+    let ctx = OutOfRange::fields(vec![FieldViolation::new(
+        "page",
+        "must be between 1 and 12",
+        "OUT_OF_RANGE",
+    )]);
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert!(json["field_violations"].is_array());
+    assert_eq!(json["field_violations"][0]["field"], "page");
 }
 
 #[test]
-fn schema_precondition_violation_v1() {
-    use gts::schema::GtsSchema;
-    let schema = PreconditionViolationV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.precondition_violation.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "type", "subject", "description"],
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "subject": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string"
-                }
-            }
-        })
-    );
+fn out_of_range_format_serialization() {
+    let ctx = OutOfRange::format("page number must be an integer");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["format"], "page number must be an integer");
 }
 
 #[test]
-fn schema_precondition_failure_v1() {
-    use gts::schema::GtsSchema;
-    let schema = PreconditionFailureV1::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.precondition_failure.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "additionalProperties": false,
-            "type": "object",
-            "required": ["gts_type", "violations"],
-            "properties": {
-                "gts_type": {
-                    "description": "GTS schema identifier",
-                    "format": "gts-schema-id",
-                    "title": "GTS Schema ID",
-                    "type": "string",
-                    "x-gts-ref": "gts.*"
-                },
-                "violations": {
-                    "items": {
-                        "$ref": "#/$defs/PreconditionViolationV1"
-                    },
-                    "type": "array"
-                }
-            }
-        })
-    );
+fn out_of_range_constraint_serialization() {
+    let ctx = OutOfRange::constraint("page out of range");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["constraint"], "page out of range");
 }
 
 #[test]
-fn schema_validation() {
-    use gts::schema::GtsSchema;
-    let schema = Validation::gts_schema_with_refs();
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "$id": "gts://gts.cf.core.errors.validation.v1~",
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "oneOf": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "field_violations": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "gts://gts.cf.core.errors.field_violation.v1~"
-                            }
-                        }
-                    },
-                    "required": ["field_violations"]
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "format": {
-                            "type": "string"
-                        }
-                    },
-                    "required": ["format"]
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "constraint": {
-                            "type": "string"
-                        }
-                    },
-                    "required": ["constraint"]
-                }
-            ]
-        })
-    );
+fn unimplemented_serialization() {
+    let ctx = Unimplemented::new("GRPC_ROUTING", "cf.oagw");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["reason"], "GRPC_ROUTING");
+    assert_eq!(json["domain"], "cf.oagw");
+}
+
+#[test]
+fn internal_serialization() {
+    let ctx = Internal::new("db pool exhausted");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["message"], "db pool exhausted");
+    assert_eq!(json["stack_entries"], serde_json::json!([]));
+}
+
+#[test]
+fn service_unavailable_serialization() {
+    let ctx = ServiceUnavailable::new(30);
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["retry_after_seconds"], 30);
+}
+
+#[test]
+fn data_loss_serialization() {
+    let ctx = DataLoss::new("gts.cf.core.files.file.v1", "file-abc");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["resource_type"], "gts.cf.core.files.file.v1");
+    assert_eq!(json["resource_name"], "file-abc");
+    assert_eq!(json["description"], "Data loss detected");
+}
+
+#[test]
+fn unauthenticated_serialization() {
+    let ctx = Unauthenticated::new("TOKEN_EXPIRED", "auth.cyberfabric.io");
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["reason"], "TOKEN_EXPIRED");
+    assert_eq!(json["domain"], "auth.cyberfabric.io");
+}
+
+#[test]
+fn debug_info_serialization() {
+    let ctx = DebugInfo::new("something broke").with_stack(vec!["frame1".to_string()]);
+    let json = serde_json::to_value(&ctx).unwrap();
+    assert_eq!(json["detail"], "something broke");
+    assert_eq!(json["stack_entries"][0], "frame1");
 }

@@ -14,7 +14,7 @@
 | Field | Type | Description |
 |-------|------|-------------|
 | `description` | `String` | Human-readable debug message (generic in production) |
-| `details` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
+| `extra` | `Option<Object>` | Reserved for derived GTS type extensions (p3+); absent in p1 |
 
 ## Constructor Example
 
@@ -44,7 +44,7 @@ let err = CanonicalError::unknown(
         "status": { "const": 500 },
         "context": {
           "type": "object",
-          "required": ["description", "stack_entries"],
+          "required": ["description"],
           "properties": {
             "resource_type": {
               "type": "string",
@@ -53,11 +53,6 @@ let err = CanonicalError::unknown(
             "description": {
               "type": "string",
               "description": "Human-readable debug message (generic in production)"
-            },
-            "stack_entries": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Stack trace entries (empty in production)"
             }
           },
           "additionalProperties": false
@@ -75,10 +70,9 @@ let err = CanonicalError::unknown(
   "type": "gts://gts.cf.core.errors.err.v1~cf.core.err.unknown.v1~",
   "title": "Unknown",
   "status": 500,
-  "details": "Unexpected response from payment provider",
+  "detail": "Unexpected response from payment provider",
   "context": {
-    "description": "Unexpected response from payment provider",
-    "stack_entries": []
+    "description": "Unexpected response from payment provider"
   }
 }
 ```
