@@ -11,14 +11,17 @@ use crate::domain::repos::{
     PolicySnapshotProvider, QuotaUsageRepository, ReactionRepository, ThreadSummaryRepository,
     TurnRepository, UserLimitsProvider, VectorStoreRepository,
 };
+use crate::domain::service::quota_settler::QuotaSettler;
 use crate::infra::llm::LlmProvider;
 
 mod attachment_service;
 mod chat_service;
 pub(crate) mod credit_arithmetic;
+pub(crate) mod finalization_service;
 mod message_service;
 mod model_service;
 mod quota_service;
+pub(crate) mod quota_settler;
 mod reaction_service;
 mod stream_service;
 #[cfg(test)]
@@ -27,6 +30,7 @@ pub(crate) mod token_estimator;
 
 pub(crate) use attachment_service::AttachmentService;
 pub(crate) use chat_service::ChatService;
+pub(crate) use finalization_service::FinalizationService;
 pub(crate) use message_service::MessageService;
 pub(crate) use model_service::ModelService;
 pub(crate) use quota_service::QuotaService;
@@ -115,6 +119,7 @@ pub(crate) struct AppServices<
     pub(crate) attachments: AttachmentService<CR>,
     pub(crate) models: ModelService,
     pub(crate) quota: QuotaService<QR>,
+    pub(crate) finalization: Arc<FinalizationService<TR, MR>>,
 }
 
 impl<
@@ -140,6 +145,25 @@ impl<
     ) -> Self {
         let enforcer = PolicyEnforcer::new(authz);
 
+        // Type-erase QuotaService<QR> → Arc<dyn QuotaSettler> for FinalizationService (D2).
+        // QuotaService is stateless (holds only Arc refs and Copy configs), so a second
+        // instance is functionally identical to sharing via Arc.
+        let quota_settler: Arc<dyn QuotaSettler> = Arc::new(QuotaService::new(
+            Arc::clone(&db),
+            Arc::clone(&repos.quota),
+            Arc::clone(&policy_provider),
+            Arc::clone(&limits_provider),
+            estimation_budgets,
+            quota_config,
+        ));
+
+        let finalization = Arc::new(FinalizationService::new(
+            Arc::clone(&db),
+            Arc::clone(&repos.turn),
+            Arc::clone(&repos.message),
+            quota_settler,
+        ));
+
         Self {
             chats: ChatService::new(
                 Arc::clone(&db),
@@ -162,6 +186,7 @@ impl<
                 enforcer.clone(),
                 llm,
                 streaming_config,
+                Arc::clone(&finalization),
             ),
             reactions: ReactionService::new(
                 Arc::clone(&db),
@@ -186,6 +211,7 @@ impl<
                 estimation_budgets,
                 quota_config,
             ),
+            finalization,
         }
     }
 }

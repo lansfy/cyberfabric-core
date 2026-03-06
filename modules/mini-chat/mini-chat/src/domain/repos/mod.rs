@@ -3,6 +3,7 @@ mod chat_repo;
 mod message_repo;
 mod model_pref_repo;
 mod model_resolver;
+mod outbox_enqueuer;
 mod policy_snapshot_provider;
 mod quota_usage_repo;
 mod reaction_repo;
@@ -18,6 +19,7 @@ pub(crate) use message_repo::{
 };
 pub(crate) use model_pref_repo::ModelPrefRepository;
 pub(crate) use model_resolver::ModelResolver;
+pub(crate) use outbox_enqueuer::OutboxEnqueuer;
 pub(crate) use policy_snapshot_provider::PolicySnapshotProvider;
 pub(crate) use quota_usage_repo::{IncrementReserveParams, QuotaUsageRepository, SettleParams};
 pub(crate) use reaction_repo::{ReactionRepository, UpsertReactionParams};

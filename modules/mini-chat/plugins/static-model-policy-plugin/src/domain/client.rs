@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use mini_chat_sdk::{
     MiniChatModelPolicyPluginClientV1, MiniChatModelPolicyPluginError, PolicySnapshot,
-    PolicyVersionInfo, UserLimits,
+    PolicyVersionInfo, PublishError, UsageEvent, UserLimits,
 };
 use time::OffsetDateTime;
+use tracing::debug;
 use uuid::Uuid;
 
 use super::service::Service;
@@ -51,5 +52,15 @@ impl MiniChatModelPolicyPluginClientV1 for Service {
             standard: self.default_standard_limits.clone(),
             premium: self.default_premium_limits.clone(),
         })
+    }
+
+    async fn publish_usage(&self, payload: UsageEvent) -> Result<(), PublishError> {
+        debug!(
+            turn_id = %payload.turn_id,
+            tenant_id = %payload.tenant_id,
+            billing_outcome = %payload.billing_outcome,
+            "static plugin: publish_usage no-op"
+        );
+        Ok(())
     }
 }

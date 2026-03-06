@@ -301,6 +301,8 @@ async fn find_running_returns_none_after_completion() {
                 state: TurnState::Completed,
                 error_code: None,
                 error_detail: None,
+                assistant_message_id: None,
+                provider_response_id: None,
             },
         )
         .await
@@ -343,6 +345,8 @@ async fn cas_update_state_on_running_succeeds() {
                 state: TurnState::Failed,
                 error_code: Some("provider_error".to_owned()),
                 error_detail: Some("timeout".to_owned()),
+                assistant_message_id: None,
+                provider_response_id: None,
             },
         )
         .await
@@ -374,6 +378,8 @@ async fn cas_update_state_on_terminal_returns_zero() {
             state: TurnState::Completed,
             error_code: None,
             error_detail: None,
+            assistant_message_id: None,
+            provider_response_id: None,
         },
     )
     .await
@@ -389,6 +395,8 @@ async fn cas_update_state_on_terminal_returns_zero() {
                 state: TurnState::Cancelled,
                 error_code: None,
                 error_detail: None,
+                assistant_message_id: None,
+                provider_response_id: None,
             },
         )
         .await
@@ -488,6 +496,8 @@ async fn soft_delete_hides_from_find_latest() {
             state: TurnState::Completed,
             error_code: None,
             error_detail: None,
+            assistant_message_id: None,
+            provider_response_id: None,
         },
     )
     .await
@@ -530,6 +540,8 @@ async fn find_latest_turn_returns_most_recent() {
             state: TurnState::Completed,
             error_code: None,
             error_detail: None,
+            assistant_message_id: None,
+            provider_response_id: None,
         },
     )
     .await
@@ -999,6 +1011,8 @@ async fn cas_mutual_exclusion_exactly_one_winner() {
                 state: TurnState::Completed,
                 error_code: None,
                 error_detail: None,
+                assistant_message_id: None,
+                provider_response_id: None,
             },
         ),
         repo.cas_update_state(
@@ -1009,6 +1023,8 @@ async fn cas_mutual_exclusion_exactly_one_winner() {
                 state: TurnState::Failed,
                 error_code: Some("timeout".to_owned()),
                 error_detail: None,
+                assistant_message_id: None,
+                provider_response_id: None,
             },
         ),
     );

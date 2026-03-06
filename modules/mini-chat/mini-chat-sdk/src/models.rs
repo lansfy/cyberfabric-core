@@ -78,3 +78,32 @@ pub struct TierLimits {
     pub limit_daily_credits_micro: i64,
     pub limit_monthly_credits_micro: i64,
 }
+
+/// Token usage reported by the provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageTokens {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// Canonical usage event payload published via the outbox after finalization.
+///
+/// Single canonical type — both the outbox enqueuer (infra) and the plugin
+/// `publish_usage()` method use this same struct.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageEvent {
+    pub tenant_id: Uuid,
+    pub user_id: Uuid,
+    pub chat_id: Uuid,
+    pub turn_id: Uuid,
+    pub request_id: Uuid,
+    pub effective_model: String,
+    pub selected_model: String,
+    pub terminal_state: String,
+    pub billing_outcome: String,
+    pub usage: Option<UsageTokens>,
+    pub actual_credits_micro: i64,
+    pub settlement_method: String,
+    pub policy_version_applied: i64,
+    pub timestamp: OffsetDateTime,
+}

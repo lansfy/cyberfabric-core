@@ -70,6 +70,9 @@ impl Module for MiniChatModule {
         cfg.quota
             .validate()
             .map_err(|e| anyhow::anyhow!("quota config: {e}"))?;
+        cfg.outbox
+            .validate()
+            .map_err(|e| anyhow::anyhow!("outbox config: {e}"))?;
 
         let vendor = cfg.vendor.trim().to_owned();
         if vendor.is_empty() {

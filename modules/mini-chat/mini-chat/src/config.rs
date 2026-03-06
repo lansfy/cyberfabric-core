@@ -15,6 +15,8 @@ pub struct MiniChatConfig {
     pub estimation_budgets: EstimationBudgets,
     #[serde(default)]
     pub quota: QuotaConfig,
+    #[serde(default)]
+    pub outbox: OutboxConfig,
 }
 
 /// SSE streaming tuning parameters.
@@ -77,6 +79,7 @@ impl Default for MiniChatConfig {
             vendor: default_vendor(),
             estimation_budgets: EstimationBudgets::default(),
             quota: QuotaConfig::default(),
+            outbox: OutboxConfig::default(),
         }
     }
 }
@@ -177,6 +180,51 @@ impl QuotaConfig {
     }
 }
 
+/// Outbox configuration for usage event publishing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboxConfig {
+    /// Queue name for usage events.
+    #[serde(default = "default_outbox_queue_name")]
+    pub queue_name: String,
+
+    /// Number of outbox partitions. Must be 1–64.
+    #[serde(default = "default_outbox_num_partitions")]
+    pub num_partitions: u32,
+}
+
+impl Default for OutboxConfig {
+    fn default() -> Self {
+        Self {
+            queue_name: default_outbox_queue_name(),
+            num_partitions: default_outbox_num_partitions(),
+        }
+    }
+}
+
+impl OutboxConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.queue_name.trim().is_empty() {
+            return Err("outbox queue_name must not be empty".to_owned());
+        }
+        if !(1..=64).contains(&self.num_partitions) {
+            return Err(format!(
+                "outbox num_partitions must be 1-64, got {}",
+                self.num_partitions
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_outbox_queue_name() -> String {
+    "mini-chat.usage_snapshot".to_owned()
+}
+
+fn default_outbox_num_partitions() -> u32 {
+    4
+}
+
 fn default_overshoot_tolerance() -> f64 {
     1.10
 }
@@ -198,6 +246,7 @@ mod tests {
         StreamingConfig::default().validate().unwrap();
         EstimationBudgets::default().validate().unwrap();
         QuotaConfig::default().validate().unwrap();
+        OutboxConfig::default().validate().unwrap();
     }
 
     #[test]

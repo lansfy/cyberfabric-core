@@ -13,8 +13,7 @@ use uuid::Uuid;
 use crate::config::StreamingConfig;
 use crate::domain::error::DomainError;
 use crate::domain::repos::{
-    CasCompleteParams, CasTerminalParams, ChatRepository, CreateTurnParams,
-    InsertAssistantMessageParams, InsertUserMessageParams, MessageRepository, TurnRepository,
+    ChatRepository, CreateTurnParams, InsertUserMessageParams, MessageRepository, TurnRepository,
 };
 use crate::domain::stream_events::{DoneData, ErrorData, StreamEvent};
 use crate::infra::db::entity::chat_turn::{Model as TurnModel, TurnState};
@@ -92,23 +91,81 @@ pub enum StreamError {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// PersistenceCtx — bundled context for CAS finalization in the spawned task
+// FinalizationCtx — bundled context for atomic finalization in the spawned task
 // ════════════════════════════════════════════════════════════════════════════
 
-/// Persistence context cloned into the spawned provider task for CAS
-/// finalization after stream completion. `None` in unit tests.
+/// All context needed to call `FinalizationService::finalize_turn_cas()`
+/// from the spawned provider task. Replaces the old `PersistenceCtx`.
+///
+/// Assembled in `run_stream()` after preflight commits, from `PreflightDecision`
+/// fields + request context. `None` in unit tests (no DB).
 #[domain_model]
-struct PersistenceCtx<TR: TurnRepository, MR: MessageRepository> {
-    db: Arc<DbProvider>,
-    turn_repo: Arc<TR>,
-    message_repo: Arc<MR>,
+struct FinalizationCtx<TR: TurnRepository + 'static, MR: MessageRepository + 'static> {
+    finalization_svc:
+        Arc<crate::domain::service::finalization_service::FinalizationService<TR, MR>>,
     scope: AccessScope,
     turn_id: Uuid,
     tenant_id: Uuid,
     chat_id: Uuid,
     request_id: Uuid,
+    user_id: Uuid,
     /// Pre-generated assistant message ID, also sent in `DoneData`.
     message_id: Uuid,
+    // ── Quota/preflight fields (from PreflightDecision) ──
+    effective_model: String,
+    selected_model: String,
+    reserve_tokens: i64,
+    max_output_tokens_applied: i32,
+    reserved_credits_micro: i64,
+    policy_version_applied: i64,
+    minimal_generation_floor_applied: i32,
+    quota_decision: String,
+    downgrade_from: Option<String>,
+    downgrade_reason: Option<String>,
+    period_starts: Vec<(
+        crate::infra::db::entity::quota_usage::PeriodType,
+        time::Date,
+    )>,
+}
+
+impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static> FinalizationCtx<TR, MR> {
+    /// Build a [`FinalizationInput`] from this context and stream outcome data.
+    fn to_finalization_input(
+        &self,
+        terminal_state: TurnState,
+        accumulated_text: &str,
+        usage: Option<Usage>,
+        error_code: Option<String>,
+        error_detail: Option<String>,
+        provider_response_id: Option<String>,
+    ) -> crate::domain::model::finalization::FinalizationInput {
+        crate::domain::model::finalization::FinalizationInput {
+            turn_id: self.turn_id,
+            tenant_id: self.tenant_id,
+            chat_id: self.chat_id,
+            request_id: self.request_id,
+            user_id: self.user_id,
+            scope: self.scope.clone(),
+            message_id: self.message_id,
+            terminal_state,
+            error_code,
+            error_detail,
+            accumulated_text: accumulated_text.to_owned(),
+            usage,
+            provider_response_id,
+            effective_model: self.effective_model.clone(),
+            selected_model: self.selected_model.clone(),
+            reserve_tokens: self.reserve_tokens,
+            max_output_tokens_applied: self.max_output_tokens_applied,
+            reserved_credits_micro: self.reserved_credits_micro,
+            policy_version_applied: self.policy_version_applied,
+            minimal_generation_floor_applied: self.minimal_generation_floor_applied,
+            quota_decision: self.quota_decision.clone(),
+            downgrade_from: self.downgrade_from.clone(),
+            downgrade_reason: self.downgrade_reason.clone(),
+            period_starts: self.period_starts.clone(),
+        }
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -156,7 +213,11 @@ fn normalize_error(err: &LlmProviderError) -> (String, String) {
 /// P2 adds turn persistence (pre-stream checks + CAS finalization).
 #[domain_model]
 #[allow(dead_code)]
-pub struct StreamService<TR: TurnRepository, MR: MessageRepository, CR: ChatRepository> {
+pub struct StreamService<
+    TR: TurnRepository + 'static,
+    MR: MessageRepository + 'static,
+    CR: ChatRepository,
+> {
     db: Arc<DbProvider>,
     turn_repo: Arc<TR>,
     message_repo: Arc<MR>,
@@ -164,11 +225,13 @@ pub struct StreamService<TR: TurnRepository, MR: MessageRepository, CR: ChatRepo
     enforcer: PolicyEnforcer,
     llm: Arc<dyn LlmProvider>,
     streaming_config: StreamingConfig,
+    finalization: Arc<crate::domain::service::finalization_service::FinalizationService<TR, MR>>,
 }
 
 impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepository>
     StreamService<TR, MR, CR>
 {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         db: Arc<DbProvider>,
         turn_repo: Arc<TR>,
@@ -177,6 +240,9 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
         enforcer: PolicyEnforcer,
         llm: Arc<dyn LlmProvider>,
         streaming_config: StreamingConfig,
+        finalization: Arc<
+            crate::domain::service::finalization_service::FinalizationService<TR, MR>,
+        >,
     ) -> Self {
         Self {
             db,
@@ -186,6 +252,7 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
             enforcer,
             llm,
             streaming_config,
+            finalization,
         }
     }
 
@@ -262,6 +329,7 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
         let turn_repo = Arc::clone(&self.turn_repo);
         let content_clone = content.clone();
         let scope_tx = scope.clone();
+        let effective_model_tx = effective_model.clone();
 
         self.db
             .transaction(|tx| {
@@ -296,7 +364,7 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
                                 max_output_tokens_applied: None,
                                 reserved_credits_micro: None,
                                 policy_version_applied: None,
-                                effective_model: Some(effective_model),
+                                effective_model: Some(effective_model_tx),
                                 minimal_generation_floor_applied: None,
                             },
                         )
@@ -320,16 +388,29 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
         // Pre-generate assistant message ID (sent in DoneData and used in CAS)
         let message_id = Uuid::new_v4();
 
-        let persist = PersistenceCtx {
-            db: Arc::clone(&self.db),
-            turn_repo: Arc::clone(&self.turn_repo),
-            message_repo: Arc::clone(&self.message_repo),
+        // TODO(P3→P4): populate quota fields from PreflightDecision once preflight
+        // is wired in. For now, use zero/placeholder values — finalization still
+        // runs (settlement will be Released/Estimated with zero reserves).
+        let finalization_ctx = FinalizationCtx {
+            finalization_svc: Arc::clone(&self.finalization),
             scope,
             turn_id,
             tenant_id,
             chat_id,
             request_id,
+            user_id,
             message_id,
+            effective_model: effective_model.clone(),
+            selected_model: model.clone(),
+            reserve_tokens: 0,
+            max_output_tokens_applied: 0,
+            reserved_credits_micro: 0,
+            policy_version_applied: 0,
+            minimal_generation_floor_applied: 0,
+            quota_decision: "allow".to_owned(),
+            downgrade_from: None,
+            downgrade_reason: None,
+            period_starts: Vec::new(),
         };
 
         Ok(spawn_provider_task(
@@ -339,14 +420,19 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
             model,
             cancel,
             tx,
-            Some(persist),
+            Some(finalization_ctx),
         ))
     }
 }
 
 /// Core provider task: reads from the LLM, translates events, and returns
-/// a [`StreamOutcome`]. After the stream ends, CAS-finalizes the turn if
-/// a persistence context is provided.
+/// a [`StreamOutcome`]. After the stream ends, atomically finalizes the turn
+/// via `FinalizationService::finalize_turn_cas()` if a context is provided.
+///
+/// All five terminal paths (provider done, incomplete, provider error,
+/// client disconnect, pre-stream error) route through `finalize_turn_cas()`.
+/// SSE terminal events (Done/Error) are emitted only after the CAS winner
+/// commits the transaction (D3).
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -361,12 +447,12 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
     model: String,
     cancel: CancellationToken,
     tx: mpsc::Sender<StreamEvent>,
-    persist: Option<PersistenceCtx<TR, MR>>,
+    fin_ctx: Option<FinalizationCtx<TR, MR>>,
 ) -> tokio::task::JoinHandle<StreamOutcome> {
     tokio::spawn(async move {
         let stream_start = std::time::Instant::now();
         let mut first_token_time: Option<std::time::Duration> = None;
-        let msg_id_str = persist.as_ref().map(|p| p.message_id.to_string());
+        let msg_id_str = fin_ctx.as_ref().map(|p| p.message_id.to_string());
 
         // Build the LLM request
         let request = LlmRequestBuilder::new(&model)
@@ -379,18 +465,46 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
         let mut provider_stream = match stream_result {
             Ok(s) => s,
             Err(e) => {
-                // Provider failed before any events — send error and return.
+                // Provider failed before any events — finalize first, then emit error.
                 let (code, message) = normalize_error(&e);
-                let _ = tx
-                    .send(StreamEvent::Error(ErrorData {
-                        code: code.clone(),
-                        message,
-                    }))
-                    .await;
 
-                // CAS finalize: mark turn as failed
-                if let Some(ref p) = persist {
-                    cas_finalize_terminal(p, TurnState::Failed, Some(code.clone()), None).await;
+                if let Some(ref fctx) = fin_ctx {
+                    let input = fctx.to_finalization_input(
+                        TurnState::Failed,
+                        "",
+                        None,
+                        Some(code.clone()),
+                        None,
+                        None,
+                    );
+                    match fctx.finalization_svc.finalize_turn_cas(input).await {
+                        Ok(outcome) if outcome.won_cas => {
+                            let _ = tx
+                                .send(StreamEvent::Error(ErrorData {
+                                    code: code.clone(),
+                                    message,
+                                }))
+                                .await;
+                        }
+                        Ok(_) => { /* CAS loser — no SSE emission */ }
+                        Err(fe) => {
+                            warn!(error = %fe, "finalization failed on pre-stream error");
+                            // Still emit error so client isn't left hanging
+                            let _ = tx
+                                .send(StreamEvent::Error(ErrorData {
+                                    code: code.clone(),
+                                    message,
+                                }))
+                                .await;
+                        }
+                    }
+                } else {
+                    let _ = tx
+                        .send(StreamEvent::Error(ErrorData {
+                            code: code.clone(),
+                            message,
+                        }))
+                        .await;
                 }
 
                 return StreamOutcome {
@@ -446,21 +560,44 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
                             warn!(error = %e, "provider stream error");
                             let (code, message) =
                                 normalize_error(&LlmProviderError::StreamError(e));
-                            let _ = tx
-                                .send(StreamEvent::Error(ErrorData {
-                                    code: code.clone(),
-                                    message,
-                                }))
-                                .await;
 
-                            // CAS finalize: mark turn as failed
-                            if let Some(ref p) = persist {
-                                cas_finalize_terminal(
-                                    p,
+                            // Finalize first, emit error only if CAS winner (D3)
+                            if let Some(ref fctx) = fin_ctx {
+                                let input = fctx.to_finalization_input(
                                     TurnState::Failed,
+                                    &accumulated_text,
+                                    None,
                                     Some(code.clone()),
                                     None,
-                                ).await;
+                                    None,
+                                );
+                                match fctx.finalization_svc.finalize_turn_cas(input).await {
+                                    Ok(outcome) if outcome.won_cas => {
+                                        let _ = tx
+                                            .send(StreamEvent::Error(ErrorData {
+                                                code: code.clone(),
+                                                message,
+                                            }))
+                                            .await;
+                                    }
+                                    Ok(_) => {}
+                                    Err(fe) => {
+                                        warn!(error = %fe, "finalization failed on stream error");
+                                        let _ = tx
+                                            .send(StreamEvent::Error(ErrorData {
+                                                code: code.clone(),
+                                                message,
+                                            }))
+                                            .await;
+                                    }
+                                }
+                            } else {
+                                let _ = tx
+                                    .send(StreamEvent::Error(ErrorData {
+                                        code: code.clone(),
+                                        message,
+                                    }))
+                                    .await;
                             }
 
                             let has_partial = !accumulated_text.is_empty();
@@ -492,9 +629,19 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
                 "stream cancelled"
             );
 
-            // CAS finalize: mark turn as cancelled
-            if let Some(ref p) = persist {
-                cas_finalize_terminal(p, TurnState::Cancelled, None, None).await;
+            // Finalize cancelled turn — no SSE emission (stream already disconnected) (D3)
+            if let Some(ref fctx) = fin_ctx {
+                let input = fctx.to_finalization_input(
+                    TurnState::Cancelled,
+                    &accumulated_text,
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+                if let Err(e) = fctx.finalization_svc.finalize_turn_cas(input).await {
+                    warn!(error = %e, "finalization failed on cancelled stream");
+                }
             }
 
             return StreamOutcome {
@@ -519,26 +666,6 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
                 response_id,
                 ..
             } => {
-                // Send citations if present
-                if !citations.is_empty() {
-                    let _ = tx
-                        .send(StreamEvent::Citations(
-                            crate::domain::stream_events::CitationsData { items: citations },
-                        ))
-                        .await;
-                }
-                // Send Done terminal
-                let _ = tx
-                    .send(StreamEvent::Done(Box::new(DoneData {
-                        message_id: msg_id_str,
-                        usage: Some(usage),
-                        effective_model: model.clone(),
-                        selected_model: model.clone(),
-                        quota_decision: "allow".into(), // P3 provides real decision
-                        downgrade_from: None,           // P3 provides
-                        downgrade_reason: None,         // P3 provides
-                    })))
-                    .await;
                 let elapsed = stream_start.elapsed();
                 info!(
                     terminal = "completed",
@@ -549,16 +676,76 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
                     "stream completed"
                 );
 
-                // CAS finalize: insert assistant message + mark turn completed
-                if let Some(ref p) = persist {
-                    cas_finalize_completed(
-                        p,
+                // Finalize first, then emit Done only if CAS winner (D3)
+                if let Some(ref fctx) = fin_ctx {
+                    let input = fctx.to_finalization_input(
+                        TurnState::Completed,
                         &accumulated_text,
                         Some(usage),
-                        Some(model.clone()),
+                        None,
+                        None,
                         Some(response_id.clone()),
-                    )
-                    .await;
+                    );
+                    match fctx.finalization_svc.finalize_turn_cas(input).await {
+                        Ok(outcome) if outcome.won_cas => {
+                            if !citations.is_empty() {
+                                let _ = tx
+                                    .send(StreamEvent::Citations(
+                                        crate::domain::stream_events::CitationsData {
+                                            items: citations,
+                                        },
+                                    ))
+                                    .await;
+                            }
+                            let _ = tx
+                                .send(StreamEvent::Done(Box::new(DoneData {
+                                    message_id: msg_id_str.clone(),
+                                    usage: Some(usage),
+                                    effective_model: model.clone(),
+                                    selected_model: model.clone(),
+                                    quota_decision: fctx.quota_decision.clone(),
+                                    downgrade_from: fctx.downgrade_from.clone(),
+                                    downgrade_reason: fctx.downgrade_reason.clone(),
+                                })))
+                                .await;
+                        }
+                        Ok(_) => { /* CAS loser — no SSE emission */ }
+                        Err(fe) => {
+                            warn!(error = %fe, "finalization failed on completed stream");
+                            // Emit Done anyway so client isn't left hanging
+                            let _ = tx
+                                .send(StreamEvent::Done(Box::new(DoneData {
+                                    message_id: msg_id_str.clone(),
+                                    usage: Some(usage),
+                                    effective_model: model.clone(),
+                                    selected_model: model.clone(),
+                                    quota_decision: "allow".into(),
+                                    downgrade_from: None,
+                                    downgrade_reason: None,
+                                })))
+                                .await;
+                        }
+                    }
+                } else {
+                    // No finalization context (unit tests) — emit directly
+                    if !citations.is_empty() {
+                        let _ = tx
+                            .send(StreamEvent::Citations(
+                                crate::domain::stream_events::CitationsData { items: citations },
+                            ))
+                            .await;
+                    }
+                    let _ = tx
+                        .send(StreamEvent::Done(Box::new(DoneData {
+                            message_id: msg_id_str.clone(),
+                            usage: Some(usage),
+                            effective_model: model.clone(),
+                            selected_model: model.clone(),
+                            quota_decision: "allow".into(),
+                            downgrade_from: None,
+                            downgrade_reason: None,
+                        })))
+                        .await;
                 }
 
                 StreamOutcome {
@@ -572,17 +759,6 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
                 }
             }
             TerminalOutcome::Incomplete { usage, reason, .. } => {
-                let _ = tx
-                    .send(StreamEvent::Done(Box::new(DoneData {
-                        message_id: msg_id_str,
-                        usage: Some(usage),
-                        effective_model: model.clone(),
-                        selected_model: model.clone(),
-                        quota_decision: "allow".into(),
-                        downgrade_from: None,
-                        downgrade_reason: None,
-                    })))
-                    .await;
                 let elapsed = stream_start.elapsed();
                 warn!(
                     terminal = "incomplete",
@@ -592,17 +768,60 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
                     "stream incomplete"
                 );
 
-                // CAS finalize: insert assistant message + mark turn completed
-                // (incomplete is still a valid response, just truncated)
-                if let Some(ref p) = persist {
-                    cas_finalize_completed(
-                        p,
+                // Incomplete maps to Completed in DB — provider finished but hit
+                // max_output_tokens. From billing/persistence perspective this is
+                // a completed turn with truncated content (see design D10).
+                if let Some(ref fctx) = fin_ctx {
+                    let input = fctx.to_finalization_input(
+                        TurnState::Completed,
                         &accumulated_text,
                         Some(usage),
-                        Some(model.clone()),
-                        None, // Incomplete has no response_id
-                    )
-                    .await;
+                        None,
+                        None,
+                        None,
+                    );
+                    match fctx.finalization_svc.finalize_turn_cas(input).await {
+                        Ok(outcome) if outcome.won_cas => {
+                            let _ = tx
+                                .send(StreamEvent::Done(Box::new(DoneData {
+                                    message_id: msg_id_str.clone(),
+                                    usage: Some(usage),
+                                    effective_model: model.clone(),
+                                    selected_model: model.clone(),
+                                    quota_decision: fctx.quota_decision.clone(),
+                                    downgrade_from: fctx.downgrade_from.clone(),
+                                    downgrade_reason: fctx.downgrade_reason.clone(),
+                                })))
+                                .await;
+                        }
+                        Ok(_) => {}
+                        Err(fe) => {
+                            warn!(error = %fe, "finalization failed on incomplete stream");
+                            let _ = tx
+                                .send(StreamEvent::Done(Box::new(DoneData {
+                                    message_id: msg_id_str.clone(),
+                                    usage: Some(usage),
+                                    effective_model: model.clone(),
+                                    selected_model: model.clone(),
+                                    quota_decision: "allow".into(),
+                                    downgrade_from: None,
+                                    downgrade_reason: None,
+                                })))
+                                .await;
+                        }
+                    }
+                } else {
+                    let _ = tx
+                        .send(StreamEvent::Done(Box::new(DoneData {
+                            message_id: msg_id_str.clone(),
+                            usage: Some(usage),
+                            effective_model: model.clone(),
+                            selected_model: model.clone(),
+                            quota_decision: "allow".into(),
+                            downgrade_from: None,
+                            downgrade_reason: None,
+                        })))
+                        .await;
                 }
 
                 StreamOutcome {
@@ -617,12 +836,6 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
             }
             TerminalOutcome::Failed { error, usage, .. } => {
                 let (code, message) = normalize_error(&error);
-                let _ = tx
-                    .send(StreamEvent::Error(ErrorData {
-                        code: code.clone(),
-                        message,
-                    }))
-                    .await;
                 let elapsed = stream_start.elapsed();
                 warn!(
                     terminal = "failed",
@@ -632,9 +845,43 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
                     "stream failed"
                 );
 
-                // CAS finalize: mark turn as failed
-                if let Some(ref p) = persist {
-                    cas_finalize_terminal(p, TurnState::Failed, Some(code.clone()), None).await;
+                // Finalize first, emit error only if CAS winner (D3)
+                if let Some(ref fctx) = fin_ctx {
+                    let input = fctx.to_finalization_input(
+                        TurnState::Failed,
+                        &accumulated_text,
+                        usage,
+                        Some(code.clone()),
+                        None,
+                        None,
+                    );
+                    match fctx.finalization_svc.finalize_turn_cas(input).await {
+                        Ok(outcome) if outcome.won_cas => {
+                            let _ = tx
+                                .send(StreamEvent::Error(ErrorData {
+                                    code: code.clone(),
+                                    message,
+                                }))
+                                .await;
+                        }
+                        Ok(_) => {}
+                        Err(fe) => {
+                            warn!(error = %fe, "finalization failed on failed stream");
+                            let _ = tx
+                                .send(StreamEvent::Error(ErrorData {
+                                    code: code.clone(),
+                                    message,
+                                }))
+                                .await;
+                        }
+                    }
+                } else {
+                    let _ = tx
+                        .send(StreamEvent::Error(ErrorData {
+                            code: code.clone(),
+                            message,
+                        }))
+                        .await;
                 }
 
                 StreamOutcome {
@@ -651,116 +898,11 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
     })
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// CAS finalization helpers
-// ════════════════════════════════════════════════════════════════════════════
-
-/// CAS-finalize a completed/incomplete turn: insert assistant message then
-/// update turn to `completed`.
-#[allow(clippy::cognitive_complexity)]
-async fn cas_finalize_completed<TR: TurnRepository, MR: MessageRepository>(
-    p: &PersistenceCtx<TR, MR>,
-    text: &str,
-    usage: Option<Usage>,
-    model: Option<String>,
-    provider_response_id: Option<String>,
-) {
-    let conn = match p.db.conn() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(error = %e, turn_id = %p.turn_id, "CAS finalize: failed to get DB connection");
-            return;
-        }
-    };
-
-    // Insert assistant message
-    let msg_result = p
-        .message_repo
-        .insert_assistant_message(
-            &conn,
-            &p.scope,
-            InsertAssistantMessageParams {
-                id: p.message_id,
-                tenant_id: p.tenant_id,
-                chat_id: p.chat_id,
-                request_id: p.request_id,
-                content: text.to_owned(),
-                input_tokens: usage.map(|u| u.input_tokens),
-                output_tokens: usage.map(|u| u.output_tokens),
-                model,
-                provider_response_id: provider_response_id.clone(),
-            },
-        )
-        .await;
-
-    match msg_result {
-        Ok(msg) => {
-            let rows = p
-                .turn_repo
-                .cas_update_completed(
-                    &conn,
-                    &p.scope,
-                    CasCompleteParams {
-                        turn_id: p.turn_id,
-                        assistant_message_id: msg.id,
-                        provider_response_id,
-                    },
-                )
-                .await;
-            match rows {
-                Ok(0) => warn!(turn_id = %p.turn_id, "CAS completed: lost race (0 rows)"),
-                Ok(_) => debug!(turn_id = %p.turn_id, "CAS completed: turn finalized"),
-                Err(e) => warn!(error = %e, turn_id = %p.turn_id, "CAS completed: update failed"),
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, turn_id = %p.turn_id, "CAS finalize: failed to insert assistant message");
-        }
-    }
-}
-
-/// CAS-finalize a terminal (failed/cancelled) turn.
-#[allow(clippy::cognitive_complexity)]
-async fn cas_finalize_terminal<TR: TurnRepository, MR: MessageRepository>(
-    p: &PersistenceCtx<TR, MR>,
-    state: TurnState,
-    error_code: Option<String>,
-    error_detail: Option<String>,
-) {
-    let conn = match p.db.conn() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!(error = %e, turn_id = %p.turn_id, "CAS finalize: failed to get DB connection");
-            return;
-        }
-    };
-
-    let state_label = format!("{state:?}");
-    let rows = p
-        .turn_repo
-        .cas_update_state(
-            &conn,
-            &p.scope,
-            CasTerminalParams {
-                turn_id: p.turn_id,
-                state,
-                error_code,
-                error_detail,
-            },
-        )
-        .await;
-
-    match rows {
-        Ok(0) => warn!(turn_id = %p.turn_id, "CAS terminal: lost race (0 rows)"),
-        Ok(_) => debug!(turn_id = %p.turn_id, state = %state_label, "CAS terminal: turn finalized"),
-        Err(e) => warn!(error = %e, turn_id = %p.turn_id, "CAS terminal: update failed"),
-    }
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::domain::repos::CasTerminalParams;
     use crate::infra::db::repo::chat_repo::ChatRepository as OrmChatRepo;
     use crate::infra::db::repo::message_repo::MessageRepository as MsgRepo;
     use crate::infra::db::repo::turn_repo::TurnRepository as TurnRepo;
@@ -1050,13 +1192,48 @@ mod tests {
         db: Arc<DbProvider>,
         provider: Arc<dyn LlmProvider>,
     ) -> StreamService<TurnRepo, MsgRepo, OrmChatRepo> {
+        use crate::domain::service::finalization_service::FinalizationService;
+        use crate::domain::service::quota_settler::QuotaSettler;
+
+        // Mock QuotaSettler for stream service tests
+        #[domain_model]
+        struct MockQuotaSettler;
+        #[async_trait::async_trait]
+        impl QuotaSettler for MockQuotaSettler {
+            async fn settle_in_tx(
+                &self,
+                _tx: &modkit_db::secure::DbTx<'_>,
+                _scope: &AccessScope,
+                _input: crate::domain::model::quota::SettlementInput,
+            ) -> Result<
+                crate::domain::model::quota::SettlementOutcome,
+                crate::domain::error::DomainError,
+            > {
+                Ok(crate::domain::model::quota::SettlementOutcome {
+                    settlement_method: crate::domain::model::quota::SettlementMethod::Released,
+                    actual_credits_micro: 0,
+                    charged_tokens: 0,
+                    overshoot_capped: false,
+                })
+            }
+        }
+
+        let turn_repo = Arc::new(TurnRepo);
+        let message_repo = Arc::new(MsgRepo::new(modkit_db::odata::LimitCfg {
+            default: 20,
+            max: 100,
+        }));
+        let finalization = Arc::new(FinalizationService::new(
+            Arc::clone(&db),
+            Arc::clone(&turn_repo),
+            Arc::clone(&message_repo),
+            Arc::new(MockQuotaSettler) as Arc<dyn QuotaSettler>,
+        ));
+
         StreamService::new(
             db,
-            Arc::new(TurnRepo),
-            Arc::new(MsgRepo::new(modkit_db::odata::LimitCfg {
-                default: 20,
-                max: 100,
-            })),
+            turn_repo,
+            message_repo,
             Arc::new(OrmChatRepo::new(modkit_db::odata::LimitCfg {
                 default: 20,
                 max: 100,
@@ -1064,6 +1241,7 @@ mod tests {
             mock_enforcer(),
             provider,
             crate::config::StreamingConfig::default(),
+            finalization,
         )
     }
 
@@ -1139,6 +1317,8 @@ mod tests {
                     state: TurnState::Completed,
                     error_code: None,
                     error_detail: None,
+                    assistant_message_id: None,
+                    provider_response_id: None,
                 },
             )
             .await

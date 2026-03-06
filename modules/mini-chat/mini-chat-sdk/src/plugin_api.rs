@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::error::MiniChatModelPolicyPluginError;
-use crate::models::{PolicySnapshot, PolicyVersionInfo, UserLimits};
+use crate::error::{MiniChatModelPolicyPluginError, PublishError};
+use crate::models::{PolicySnapshot, PolicyVersionInfo, UsageEvent, UserLimits};
 
 /// Plugin API trait for mini-chat model policy implementations.
 ///
@@ -30,4 +30,10 @@ pub trait MiniChatModelPolicyPluginClientV1: Send + Sync {
         user_id: Uuid,
         policy_version: u64,
     ) -> Result<UserLimits, MiniChatModelPolicyPluginError>;
+
+    /// Publish a usage event after turn finalization.
+    ///
+    /// Called by the outbox processor after the finalization transaction
+    /// commits. Plugins can forward the event to external billing systems.
+    async fn publish_usage(&self, payload: UsageEvent) -> Result<(), PublishError>;
 }
