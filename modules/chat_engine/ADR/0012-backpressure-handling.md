@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # ADR-0012: Streaming Backpressure with Buffer Limits
 
 **Date**: 2026-02-04

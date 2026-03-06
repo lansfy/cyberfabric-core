@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # ADR-0016: Recreation Creates Variants, Branching Creates Children
 
 **Date**: 2026-02-04

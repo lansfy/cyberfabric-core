@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # ADR-0019: Token-Based Session Sharing with Branching
 
 **Date**: 2026-02-04

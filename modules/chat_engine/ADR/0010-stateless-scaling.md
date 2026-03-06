@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # ADR-0010: Stateless Horizontal Scaling with Database State
 
 **Date**: 2026-02-04

@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # Chat Engine API Protocol Specifications
 
 This directory contains protocol specification files for the Chat Engine API, defining the HTTP REST API, WebSocket streaming API, and Webhook protocols.

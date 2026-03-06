@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # ADR-0005: External File Storage for File Attachments
 
 **Date**: 2026-02-04

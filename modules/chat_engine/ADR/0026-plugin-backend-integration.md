@@ -1,4 +1,6 @@
-# ADR-0026: CyberFabric Plugin System for Backend Integration
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
+# ADR-0026: Internal Plugin Interface for Backend Integration
 
 **Date**: 2026-02-23
 

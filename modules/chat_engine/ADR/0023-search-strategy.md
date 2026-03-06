@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # ADR-0023: PostgreSQL Full-Text Search with GIN Indexes
 
 **Date**: 2026-02-04

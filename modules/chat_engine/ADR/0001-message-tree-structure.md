@@ -1,3 +1,5 @@
+Created:  2026-03-06 by Constructor Tech
+Updated:  2026-03-06 by Constructor Tech
 # ADR-0001: Message Tree with Immutable Parents
 
 **Date**: 2026-02-04
