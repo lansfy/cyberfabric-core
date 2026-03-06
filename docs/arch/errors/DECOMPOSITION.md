@@ -21,21 +21,20 @@ Build the `CanonicalError` enum, context types, `Problem` mapping, and `#[resour
 #### 1.1 Core types
 
 - [ ] 1.1.1 Define `CanonicalError` enum with 16 variants in `libs/modkit-errors/src/canonical.rs`
-- [ ] 1.1.2 Define context types: `Validation`, `ResourceInfo`, `ErrorInfo`, `QuotaFailure`, `PreconditionFailure`, `DebugInfo`, `RetryInfo`, `RequestInfo` in `libs/modkit-errors/src/context.rs`
+- [ ] 1.1.2 Define context types: `Validation`, `ResourceInfo`, `ErrorInfo`, `QuotaFailure`, `PreconditionFailure`, `RetryInfo`, `RequestInfo` in `libs/modkit-errors/src/context.rs`
 - [ ] 1.1.3 Implement `GtsSchema` for each context type via `#[struct_to_gts_schema]` macro
 - [ ] 1.1.4 Implement `GtsSchema` for `CanonicalError` (oneOf schema with all 16 variants)
-- [ ] 1.1.5 Implement ergonomic constructors (one per category) and builder methods (`with_message`, `with_resource_type`, `with_debug_info`)
-- [ ] 1.1.6 Implement accessors: `message()`, `resource_type()`, `debug_info()`, `gts_type()`, `status_code()`, `title()`
+- [ ] 1.1.5 Implement ergonomic constructors (one per category) and builder methods (`with_message`, `with_resource_type`)
+- [ ] 1.1.6 Implement accessors: `message()`, `resource_type()`, `gts_type()`, `status_code()`, `title()`
 - [ ] 1.1.7 Implement `Display` and `std::error::Error` for `CanonicalError`
 
 #### 1.2 REST mapping
 
 > Traces to: `cpt-cf-errors-interface-problem-wire-format`, `cpt-cf-errors-constraint-rfc9457`
 
-- [ ] 1.2.1 Define `Problem` struct with RFC 9457 fields + `trace_id`, `context`, `debug` extensions
-- [ ] 1.2.2 Implement `Problem::from_error()` (production — omits debug)
-- [ ] 1.2.3 Implement `Problem::from_error_debug()` (debug — includes debug if present)
-- [ ] 1.2.4 Implement `From<CanonicalError> for Problem` delegating to `from_error()`
+- [ ] 1.2.1 Define `Problem` struct with RFC 9457 fields + `trace_id`, `context` extensions
+- [ ] 1.2.2 Implement `Problem::from_error()`
+- [ ] 1.2.3 Implement `From<CanonicalError> for Problem` delegating to `from_error()`
 - [ ] 1.2.5 Implement `TryFrom<Problem> for CanonicalError` for SDK round-trip
 
 #### 1.3 Resource error macro
@@ -85,9 +84,8 @@ Build the `CanonicalError` enum, context types, `Problem` mapping, and `#[resour
 - [ ] 2.1 Implement Axum error middleware that catches `CanonicalError` from handlers
 - [ ] 2.2 Set `trace_id` from the current tracing span context or request headers (`x-trace-id`, `x-request-id`, `traceparent`)
 - [ ] 2.3 Set `instance` from the request URI path
-- [ ] 2.4 Select `from_error()` vs `from_error_debug()` based on application configuration
-- [ ] 2.5 Catch panics and unhandled errors, wrap as `CanonicalError::internal(...)`
-- [ ] 2.6 Log `debug_info` at WARN/ERROR with `trace_id` for correlation
+- [ ] 2.4 Catch panics and unhandled errors, wrap as `CanonicalError::internal(...)`
+- [ ] 2.5 Log error details server-side at WARN/ERROR with `trace_id` for correlation
 
 ---
 

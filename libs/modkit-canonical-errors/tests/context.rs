@@ -1,7 +1,7 @@
 extern crate cf_modkit_errors;
 
 use cf_modkit_errors::{
-    Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, DebugInfo, FailedPrecondition,
+    Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, FailedPrecondition,
     FieldViolation, Internal, InvalidArgument, NotFound, OutOfRange, PermissionDenied,
     PreconditionViolation, QuotaViolation, ResourceExhausted, ServiceUnavailable, Unauthenticated,
     Unimplemented, Unknown,
@@ -203,10 +203,3 @@ fn unauthenticated_serialization() {
     assert_eq!(json["domain"], "auth.cyberfabric.io");
 }
 
-#[test]
-fn debug_info_serialization() {
-    let ctx = DebugInfo::new("something broke").with_stack(vec!["frame1".to_string()]);
-    let json = serde_json::to_value(&ctx).unwrap();
-    assert_eq!(json["detail"], "something broke");
-    assert_eq!(json["stack_entries"][0], "frame1");
-}

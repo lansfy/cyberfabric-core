@@ -1,7 +1,7 @@
 extern crate cf_modkit_errors;
 
 use cf_modkit_errors::{
-    Aborted, AlreadyExists, Cancelled, CanonicalError, DataLoss, DeadlineExceeded, DebugInfo,
+    Aborted, AlreadyExists, Cancelled, CanonicalError, DataLoss, DeadlineExceeded,
     FailedPrecondition, Internal, InvalidArgument, NotFound, OutOfRange, PermissionDenied, Problem,
     ResourceExhausted, ServiceUnavailable, Unauthenticated, Unimplemented, Unknown,
 };
@@ -39,20 +39,6 @@ fn with_message_overrides_default() {
     let err = CanonicalError::not_found(NotFound::new("gts.cf.core.users.user.v1", "user-123"))
         .with_message("custom detail");
     assert_eq!(err.message(), "custom detail");
-}
-
-#[test]
-fn with_debug_info_attaches_and_reads() {
-    let err = CanonicalError::not_found(NotFound::new("t", "n"))
-        .with_debug_info(DebugInfo::new("internal trace"));
-    let di = err.debug_info().unwrap();
-    assert_eq!(di.detail, "internal trace");
-}
-
-#[test]
-fn debug_info_is_none_by_default() {
-    let err = CanonicalError::not_found(NotFound::new("t", "n"));
-    assert!(err.debug_info().is_none());
 }
 
 #[test]

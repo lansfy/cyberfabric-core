@@ -389,28 +389,3 @@ impl Unauthenticated {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DebugInfo — attached to CanonicalError as an optional envelope field
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DebugInfo {
-    pub detail: String,
-    pub stack_entries: Vec<String>,
-}
-
-impl DebugInfo {
-    #[must_use]
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-            stack_entries: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_stack(mut self, entries: impl Into<Vec<String>>) -> Self {
-        self.stack_entries = entries.into();
-        self
-    }
-}

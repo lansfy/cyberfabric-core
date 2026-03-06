@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::context::{
-    Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, DebugInfo, FailedPrecondition,
+    Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, FailedPrecondition,
     Internal, InvalidArgument, NotFound, OutOfRange, PermissionDenied, ResourceExhausted,
     ServiceUnavailable, Unauthenticated, Unimplemented, Unknown,
 };
@@ -16,97 +16,81 @@ pub enum CanonicalError {
         ctx: Cancelled,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     Unknown {
         ctx: Unknown,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     InvalidArgument {
         ctx: InvalidArgument,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     DeadlineExceeded {
         ctx: DeadlineExceeded,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     NotFound {
         ctx: NotFound,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     AlreadyExists {
         ctx: AlreadyExists,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     PermissionDenied {
         ctx: PermissionDenied,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     ResourceExhausted {
         ctx: ResourceExhausted,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     FailedPrecondition {
         ctx: FailedPrecondition,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     Aborted {
         ctx: Aborted,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     OutOfRange {
         ctx: OutOfRange,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     Unimplemented {
         ctx: Unimplemented,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     Internal {
         ctx: Internal,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     ServiceUnavailable {
         ctx: ServiceUnavailable,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     DataLoss {
         ctx: DataLoss,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
     Unauthenticated {
         ctx: Unauthenticated,
         message: String,
         resource_type: Option<String>,
-        debug_info: Option<DebugInfo>,
     },
 }
 
@@ -119,7 +103,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Operation cancelled by the client"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -130,7 +113,6 @@ impl CanonicalError {
             ctx,
             message,
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -145,7 +127,6 @@ impl CanonicalError {
             ctx,
             message,
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -155,7 +136,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Operation did not complete within the allowed time"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -165,7 +145,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Resource not found"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -176,7 +155,6 @@ impl CanonicalError {
             ctx,
             message,
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -186,7 +164,6 @@ impl CanonicalError {
             ctx,
             message: String::from("You do not have permission to perform this operation"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -196,7 +173,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Quota exceeded"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -206,7 +182,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Operation precondition not met"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -216,7 +191,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Operation aborted due to concurrency conflict"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -231,7 +205,6 @@ impl CanonicalError {
             ctx,
             message,
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -241,7 +214,6 @@ impl CanonicalError {
             ctx,
             message: String::from("This operation is not implemented"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -251,7 +223,6 @@ impl CanonicalError {
             ctx,
             message: String::from("An internal error occurred. Please retry later."),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -261,7 +232,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Service temporarily unavailable"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -272,7 +242,6 @@ impl CanonicalError {
             ctx,
             message,
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -282,7 +251,6 @@ impl CanonicalError {
             ctx,
             message: String::from("Authentication required"),
             resource_type: None,
-            debug_info: None,
         }
     }
 
@@ -336,29 +304,6 @@ impl CanonicalError {
         self
     }
 
-    #[must_use]
-    pub fn with_debug_info(mut self, info: DebugInfo) -> Self {
-        match &mut self {
-            Self::Cancelled { debug_info, .. }
-            | Self::Unknown { debug_info, .. }
-            | Self::InvalidArgument { debug_info, .. }
-            | Self::DeadlineExceeded { debug_info, .. }
-            | Self::NotFound { debug_info, .. }
-            | Self::AlreadyExists { debug_info, .. }
-            | Self::PermissionDenied { debug_info, .. }
-            | Self::ResourceExhausted { debug_info, .. }
-            | Self::FailedPrecondition { debug_info, .. }
-            | Self::Aborted { debug_info, .. }
-            | Self::OutOfRange { debug_info, .. }
-            | Self::Unimplemented { debug_info, .. }
-            | Self::Internal { debug_info, .. }
-            | Self::ServiceUnavailable { debug_info, .. }
-            | Self::DataLoss { debug_info, .. }
-            | Self::Unauthenticated { debug_info, .. } => *debug_info = Some(info),
-        }
-        self
-    }
-
     // --- Accessors ---
 
     #[must_use]
@@ -402,28 +347,6 @@ impl CanonicalError {
             | Self::ServiceUnavailable { resource_type, .. }
             | Self::DataLoss { resource_type, .. }
             | Self::Unauthenticated { resource_type, .. } => resource_type.as_deref(),
-        }
-    }
-
-    #[must_use]
-    pub fn debug_info(&self) -> Option<&DebugInfo> {
-        match self {
-            Self::Cancelled { debug_info, .. }
-            | Self::Unknown { debug_info, .. }
-            | Self::InvalidArgument { debug_info, .. }
-            | Self::DeadlineExceeded { debug_info, .. }
-            | Self::NotFound { debug_info, .. }
-            | Self::AlreadyExists { debug_info, .. }
-            | Self::PermissionDenied { debug_info, .. }
-            | Self::ResourceExhausted { debug_info, .. }
-            | Self::FailedPrecondition { debug_info, .. }
-            | Self::Aborted { debug_info, .. }
-            | Self::OutOfRange { debug_info, .. }
-            | Self::Unimplemented { debug_info, .. }
-            | Self::Internal { debug_info, .. }
-            | Self::ServiceUnavailable { debug_info, .. }
-            | Self::DataLoss { debug_info, .. }
-            | Self::Unauthenticated { debug_info, .. } => debug_info.as_ref(),
         }
     }
 
