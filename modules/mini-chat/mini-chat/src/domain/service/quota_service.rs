@@ -427,6 +427,8 @@ impl<QR: QuotaUsageRepository + 'static> QuotaService<QR> {
                             let minimal_generation_floor_applied =
                                 estimation_budgets.minimal_generation_floor as i32;
 
+                            let system_prompt = eff_entry.system_prompt.clone();
+
                             let preflight_decision = match decision {
                                 CascadeDecision::Allow { .. } => PreflightDecision::Allow {
                                     effective_model,
@@ -435,6 +437,7 @@ impl<QR: QuotaUsageRepository + 'static> QuotaService<QR> {
                                     reserved_credits_micro: final_reserved,
                                     policy_version_applied,
                                     minimal_generation_floor_applied,
+                                    system_prompt,
                                 },
                                 CascadeDecision::Downgrade {
                                     downgrade_from,
@@ -449,6 +452,7 @@ impl<QR: QuotaUsageRepository + 'static> QuotaService<QR> {
                                     minimal_generation_floor_applied,
                                     downgrade_from,
                                     downgrade_reason: reason,
+                                    system_prompt,
                                 },
                                 CascadeDecision::Reject => unreachable!(),
                             };
@@ -1543,6 +1547,7 @@ mod tests {
                 reserved_credits_micro,
                 policy_version_applied,
                 minimal_generation_floor_applied,
+                ..
             } => {
                 assert_eq!(effective_model, "gpt-5");
                 assert!(reserve_tokens > 0);
@@ -1887,6 +1892,7 @@ mod tests {
                 policy_version_applied,
                 max_output_tokens_applied,
                 minimal_generation_floor_applied,
+                ..
             } => (
                 effective_model,
                 reserve_tokens,

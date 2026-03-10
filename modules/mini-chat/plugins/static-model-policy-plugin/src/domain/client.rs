@@ -169,6 +169,8 @@ mod tests {
                 is_default: false,
                 sort_order: 0,
             },
+            system_prompt: String::new(),
+            thread_summary_prompt: String::new(),
         }
     }
 

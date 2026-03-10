@@ -77,6 +77,14 @@ pub struct ModelCatalogEntry {
     pub general_config: ModelGeneralConfig,
     /// Tenant preference settings captured at snapshot time.
     pub preference: ModelPreference,
+    /// System prompt sent as `instructions` in every LLM request for this model.
+    /// Empty string = no system instructions.
+    #[serde(default)]
+    pub system_prompt: String,
+    /// Prompt template used when generating thread summaries for this model.
+    /// Plumbed through the stack for future use by the summary generation job.
+    #[serde(default)]
+    pub thread_summary_prompt: String,
 }
 
 /// Per-model token estimation budget parameters (API: `PolicyModelEstimationBudgets`).

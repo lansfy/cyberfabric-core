@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 use crate::domain::error::DomainError;
 use crate::domain::models::{AttachmentSummary, ImgThumbnail};
-use crate::domain::repos::{InsertAssistantMessageParams, InsertUserMessageParams};
+use crate::domain::repos::{
+    InsertAssistantMessageParams, InsertUserMessageParams, SnapshotBoundary,
+};
 use crate::infra::db::entity::attachment::Column as AttCol;
 use crate::infra::db::entity::message::{
     ActiveModel, Column, Entity as MessageEntity, MessageRole, Model as MessageModel,
@@ -271,6 +273,113 @@ impl crate::domain::repos::MessageRepository for MessageRepository {
         }
         Ok(map)
     }
+    async fn snapshot_boundary<C: DBRunner>(
+        &self,
+        runner: &C,
+        scope: &AccessScope,
+        chat_id: Uuid,
+    ) -> Result<Option<SnapshotBoundary>, DomainError> {
+        let row = MessageEntity::find()
+            .filter(
+                Condition::all()
+                    .add(Column::ChatId.eq(chat_id))
+                    .add(Column::RequestId.is_not_null())
+                    .add(Column::DeletedAt.is_null()),
+            )
+            .secure()
+            .scope_with(scope)
+            .order_by(Column::CreatedAt, Order::Desc)
+            .order_by(Column::Id, Order::Desc)
+            .one(runner)
+            .await?;
+        Ok(row.map(|m| SnapshotBoundary {
+            created_at: m.created_at,
+            id: m.id,
+        }))
+    }
+
+    async fn recent_for_context<C: DBRunner>(
+        &self,
+        runner: &C,
+        scope: &AccessScope,
+        chat_id: Uuid,
+        limit: u32,
+        boundary: Option<SnapshotBoundary>,
+    ) -> Result<Vec<MessageModel>, DomainError> {
+        let mut cond = Condition::all()
+            .add(Column::ChatId.eq(chat_id))
+            .add(Column::RequestId.is_not_null())
+            .add(Column::DeletedAt.is_null());
+
+        if let Some(b) = boundary {
+            cond = cond.add(upper_bound_filter(b));
+        }
+
+        let mut rows = MessageEntity::find()
+            .filter(cond)
+            .secure()
+            .scope_with(scope)
+            .order_by(Column::CreatedAt, Order::Desc)
+            .order_by(Column::Id, Order::Desc)
+            .limit(u64::from(limit))
+            .all(runner)
+            .await?;
+        rows.reverse();
+        Ok(rows)
+    }
+
+    async fn recent_after_boundary<C: DBRunner>(
+        &self,
+        runner: &C,
+        scope: &AccessScope,
+        chat_id: Uuid,
+        lower_created_at: OffsetDateTime,
+        lower_id: Uuid,
+        limit: u32,
+        boundary: Option<SnapshotBoundary>,
+    ) -> Result<Vec<MessageModel>, DomainError> {
+        // Composite cursor: (created_at, id) > (lower_created_at, lower_id)
+        let lower_filter = Condition::any()
+            .add(Column::CreatedAt.gt(lower_created_at))
+            .add(
+                Condition::all()
+                    .add(Column::CreatedAt.eq(lower_created_at))
+                    .add(Column::Id.gt(lower_id)),
+            );
+
+        let mut cond = Condition::all()
+            .add(Column::ChatId.eq(chat_id))
+            .add(Column::RequestId.is_not_null())
+            .add(Column::DeletedAt.is_null())
+            .add(lower_filter);
+
+        if let Some(b) = boundary {
+            cond = cond.add(upper_bound_filter(b));
+        }
+
+        let mut rows = MessageEntity::find()
+            .filter(cond)
+            .secure()
+            .scope_with(scope)
+            .order_by(Column::CreatedAt, Order::Desc)
+            .order_by(Column::Id, Order::Desc)
+            .limit(u64::from(limit))
+            .all(runner)
+            .await?;
+        rows.reverse();
+        Ok(rows)
+    }
+}
+
+/// Composite upper-bound filter: `(created_at, id) <= (b.created_at, b.id)`.
+fn upper_bound_filter(b: SnapshotBoundary) -> Condition {
+    Condition::any()
+        .add(Column::CreatedAt.lt(b.created_at))
+        .add(
+            Condition::all()
+                .add(Column::CreatedAt.eq(b.created_at))
+                .add(Column::Id.lte(b.id)),
+        )
 }
 
 #[cfg(test)]

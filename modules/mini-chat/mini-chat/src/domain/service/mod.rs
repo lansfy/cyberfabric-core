@@ -5,7 +5,7 @@ use authz_resolver_sdk::{AuthZResolverClient, PolicyEnforcer};
 use modkit_db::DBProvider;
 use modkit_macros::domain_model;
 
-use crate::config::{EstimationBudgets, QuotaConfig, StreamingConfig};
+use crate::config::{ContextConfig, EstimationBudgets, QuotaConfig, StreamingConfig};
 use crate::domain::repos::{
     AttachmentRepository, ChatRepository, MessageRepository, ModelResolver, OutboxEnqueuer,
     PolicySnapshotProvider, QuotaUsageRepository, ReactionRepository, ThreadSummaryRepository,
@@ -16,6 +16,7 @@ use crate::infra::llm::provider_resolver::ProviderResolver;
 
 mod attachment_service;
 mod chat_service;
+pub(crate) mod context_assembly;
 pub(crate) mod credit_arithmetic;
 pub(crate) mod finalization_service;
 mod message_service;
@@ -94,6 +95,7 @@ pub(crate) struct Repositories<
     QR: QuotaUsageRepository,
     RR: ReactionRepository,
     CR: ChatRepository,
+    TSR: ThreadSummaryRepository,
 > {
     pub(crate) chat: Arc<CR>,
     pub(crate) attachment: Arc<dyn AttachmentRepository>,
@@ -101,7 +103,7 @@ pub(crate) struct Repositories<
     pub(crate) quota: Arc<QR>,
     pub(crate) turn: Arc<TR>,
     pub(crate) reaction: Arc<RR>,
-    pub(crate) thread_summary: Arc<dyn ThreadSummaryRepository>,
+    pub(crate) thread_summary: Arc<TSR>,
     pub(crate) vector_store: Arc<dyn VectorStoreRepository>,
 }
 
@@ -118,10 +120,11 @@ pub(crate) struct AppServices<
     QR: QuotaUsageRepository + 'static,
     RR: ReactionRepository + 'static,
     CR: ChatRepository + 'static,
+    TSR: ThreadSummaryRepository + 'static,
 > {
-    pub(crate) chats: ChatService<CR>,
+    pub(crate) chats: ChatService<CR, TSR>,
     pub(crate) messages: MessageService<MR, CR>,
-    pub(crate) stream: StreamService<TR, MR, QR, CR>,
+    pub(crate) stream: StreamService<TR, MR, QR, CR, TSR>,
     pub(crate) turns: TurnService<TR, MR, CR>,
     pub(crate) reactions: ReactionService<RR, MR, CR>,
     pub(crate) attachments: AttachmentService<CR>,
@@ -140,11 +143,12 @@ impl<
     QR: QuotaUsageRepository + 'static,
     RR: ReactionRepository + 'static,
     CR: ChatRepository + 'static,
-> AppServices<TR, MR, QR, RR, CR>
+    TSR: ThreadSummaryRepository + 'static,
+> AppServices<TR, MR, QR, RR, CR, TSR>
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        repos: &Repositories<TR, MR, QR, RR, CR>,
+        repos: &Repositories<TR, MR, QR, RR, CR, TSR>,
         db: Arc<DbProvider>,
         authz: Arc<dyn AuthZResolverClient>,
         model_resolver: &Arc<dyn ModelResolver>,
@@ -155,6 +159,7 @@ impl<
         estimation_budgets: EstimationBudgets,
         quota_config: QuotaConfig,
         outbox_enqueuer: Arc<dyn OutboxEnqueuer>,
+        context_config: ContextConfig,
     ) -> Self {
         let enforcer = PolicyEnforcer::new(authz);
 
@@ -209,6 +214,8 @@ impl<
                 streaming_config,
                 Arc::clone(&finalization),
                 Arc::clone(&quota_svc),
+                Arc::clone(&repos.thread_summary),
+                context_config,
             ),
             turns,
             reactions: ReactionService::new(

@@ -4,6 +4,7 @@
 #![allow(de0301_no_infra_in_domain)]
 
 pub mod error;
+pub mod llm;
 pub mod model;
 pub mod models;
 pub mod repos;

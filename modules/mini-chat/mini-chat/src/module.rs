@@ -23,6 +23,7 @@ pub(crate) type AppServices = GenericAppServices<
     QuotaUsageRepository,
     ReactionRepository,
     ChatRepository,
+    ThreadSummaryRepository,
 >;
 use crate::infra::db::repo::attachment_repo::AttachmentRepository;
 use crate::infra::db::repo::chat_repo::ChatRepository;
@@ -78,6 +79,9 @@ impl Module for MiniChatModule {
         cfg.outbox
             .validate()
             .map_err(|e| anyhow::anyhow!("outbox config: {e}"))?;
+        cfg.context
+            .validate()
+            .map_err(|e| anyhow::anyhow!("context config: {e}"))?;
         for (id, entry) in &cfg.providers {
             entry
                 .validate(id)
@@ -208,6 +212,7 @@ impl Module for MiniChatModule {
             cfg.estimation_budgets,
             cfg.quota,
             outbox_enqueuer,
+            cfg.context,
         ));
 
         self.service

@@ -9,18 +9,18 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, warn};
 use uuid::Uuid;
 
-use crate::config::StreamingConfig;
+use crate::config::{ContextConfig, StreamingConfig};
 use crate::domain::error::DomainError;
 use crate::domain::models::ResolvedModel;
 use crate::domain::repos::{
     ChatRepository, CreateTurnParams, InsertUserMessageParams, MessageRepository,
-    QuotaUsageRepository, TurnRepository,
+    QuotaUsageRepository, SnapshotBoundary, ThreadSummaryRepository, TurnRepository,
 };
 use crate::domain::stream_events::{DoneData, ErrorData, StreamEvent};
 use crate::infra::db::entity::chat_turn::{Model as TurnModel, TurnState};
 use crate::infra::llm::{
-    ClientSseEvent, LlmMessage, LlmProvider, LlmProviderError, LlmRequestBuilder, TerminalOutcome,
-    Usage, provider_resolver::ProviderResolver,
+    ClientSseEvent, LlmMessage, LlmProvider, LlmProviderError, LlmRequestBuilder, LlmTool,
+    TerminalOutcome, Usage, provider_resolver::ProviderResolver,
 };
 
 use super::{DbProvider, actions, resources};
@@ -242,6 +242,7 @@ struct PreflightResult {
     quota_decision: String,
     downgrade_from: Option<String>,
     downgrade_reason: Option<String>,
+    system_prompt: String,
 }
 
 /// Convert a `PreflightDecision` into a flat `PreflightResult` or a `StreamError`.
@@ -257,6 +258,7 @@ fn flatten_preflight(
             reserved_credits_micro,
             policy_version_applied,
             minimal_generation_floor_applied,
+            system_prompt,
         } => Ok(PreflightResult {
             effective_model,
             reserve_tokens,
@@ -267,6 +269,7 @@ fn flatten_preflight(
             quota_decision: "allow".to_owned(),
             downgrade_from: None,
             downgrade_reason: None,
+            system_prompt,
         }),
         PreflightDecision::Downgrade {
             effective_model,
@@ -277,6 +280,7 @@ fn flatten_preflight(
             minimal_generation_floor_applied,
             downgrade_from,
             downgrade_reason,
+            system_prompt,
         } => Ok(PreflightResult {
             effective_model,
             reserve_tokens,
@@ -287,6 +291,7 @@ fn flatten_preflight(
             quota_decision: "downgrade".to_owned(),
             downgrade_from: Some(downgrade_from),
             downgrade_reason: Some(downgrade_reason.as_str().to_owned()),
+            system_prompt,
         }),
         PreflightDecision::Reject {
             error_code,
@@ -315,6 +320,7 @@ pub struct StreamService<
     MR: MessageRepository + 'static,
     QR: QuotaUsageRepository + 'static,
     CR: ChatRepository,
+    TSR: ThreadSummaryRepository + 'static,
 > {
     db: Arc<DbProvider>,
     turn_repo: Arc<TR>,
@@ -325,6 +331,8 @@ pub struct StreamService<
     streaming_config: StreamingConfig,
     finalization: Arc<crate::domain::service::finalization_service::FinalizationService<TR, MR>>,
     quota: Arc<crate::domain::service::QuotaService<QR>>,
+    thread_summary_repo: Arc<TSR>,
+    context_config: ContextConfig,
 }
 
 impl<
@@ -332,7 +340,8 @@ impl<
     MR: MessageRepository + 'static,
     QR: QuotaUsageRepository + 'static,
     CR: ChatRepository,
-> StreamService<TR, MR, QR, CR>
+    TSR: ThreadSummaryRepository + 'static,
+> StreamService<TR, MR, QR, CR, TSR>
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -347,6 +356,8 @@ impl<
             crate::domain::service::finalization_service::FinalizationService<TR, MR>,
         >,
         quota: Arc<crate::domain::service::QuotaService<QR>>,
+        thread_summary_repo: Arc<TSR>,
+        context_config: ContextConfig,
     ) -> Self {
         Self {
             db,
@@ -358,6 +369,8 @@ impl<
             streaming_config,
             finalization,
             quota,
+            thread_summary_repo,
+            context_config,
         }
     }
 
@@ -453,6 +466,15 @@ impl<
             });
         }
 
+        // ── Snapshot boundary (DESIGN §ContextPlan Determinism P1) ──
+        // Must be computed BEFORE persisting the user message so the boundary
+        // excludes the current user message from context queries.
+        let snapshot_boundary = self
+            .message_repo
+            .snapshot_boundary(&conn, &scope, chat_id)
+            .await
+            .map_err(|e| StreamError::TurnCreationFailed { source: e })?;
+
         // ── Preflight quota evaluate (external I/O, no DB writes) ──
         let selected_model = model.clone();
         let computed = self
@@ -515,6 +537,17 @@ impl<
             period_starts,
         };
 
+        // ── Context assembly ──
+        let assembled = self
+            .gather_context(
+                tenant_id,
+                chat_id,
+                snapshot_boundary,
+                &pf.system_prompt,
+                &content,
+            )
+            .await?;
+
         let resolved_provider = self.provider_resolver.resolve(&provider_id).map_err(|e| {
             StreamError::TurnCreationFailed {
                 source: DomainError::internal(format!("provider resolution: {e}")),
@@ -531,7 +564,9 @@ impl<
             resolved_provider.adapter,
             proxy_path,
             ctx,
-            content,
+            assembled.messages,
+            assembled.system_instructions,
+            assembled.tools,
             model,
             provider_model_id,
             pf.max_output_tokens_applied.cast_unsigned(),
@@ -658,6 +693,92 @@ impl<
         Ok(turn_id)
     }
 
+    /// Shared context assembly: thread summary lookup, recent-message fetch
+    /// (bounded by snapshot boundary), and `assemble_context` call.
+    async fn gather_context(
+        &self,
+        tenant_id: Uuid,
+        chat_id: Uuid,
+        snapshot_boundary: Option<SnapshotBoundary>,
+        system_prompt: &str,
+        user_message: &str,
+    ) -> Result<super::context_assembly::AssembledContext, StreamError> {
+        let conn = self
+            .db
+            .conn()
+            .map_err(|e| StreamError::TurnCreationFailed {
+                source: DomainError::from(e),
+            })?;
+        let scope = AccessScope::for_tenant(tenant_id);
+
+        let thread_summary = self
+            .thread_summary_repo
+            .get_latest(&conn, &scope, chat_id)
+            .await
+            .map_err(|e| StreamError::TurnCreationFailed { source: e })?;
+
+        let recent_messages = match &thread_summary {
+            Some(ts) => {
+                self.message_repo
+                    .recent_after_boundary(
+                        &conn,
+                        &scope,
+                        chat_id,
+                        ts.boundary_created_at,
+                        ts.boundary_message_id,
+                        self.context_config.recent_messages_limit,
+                        snapshot_boundary,
+                    )
+                    .await
+            }
+            None => {
+                self.message_repo
+                    .recent_for_context(
+                        &conn,
+                        &scope,
+                        chat_id,
+                        self.context_config.recent_messages_limit,
+                        snapshot_boundary,
+                    )
+                    .await
+            }
+        }
+        .map_err(|e| StreamError::TurnCreationFailed { source: e })?;
+
+        // Map ORM models → domain ContextMessage (decouples context assembly from infra).
+        let context_messages: Vec<crate::domain::llm::ContextMessage> = recent_messages
+            .iter()
+            .map(|m| crate::domain::llm::ContextMessage {
+                role: match m.role {
+                    crate::infra::db::entity::message::MessageRole::User => {
+                        crate::domain::llm::Role::User
+                    }
+                    crate::infra::db::entity::message::MessageRole::Assistant => {
+                        crate::domain::llm::Role::Assistant
+                    }
+                    crate::infra::db::entity::message::MessageRole::System => {
+                        crate::domain::llm::Role::System
+                    }
+                },
+                content: m.content.clone(),
+            })
+            .collect();
+
+        Ok(super::context_assembly::assemble_context(
+            &super::context_assembly::ContextInput {
+                system_prompt,
+                web_search_guard: &self.context_config.web_search_guard,
+                file_search_guard: &self.context_config.file_search_guard,
+                thread_summary: thread_summary.as_ref().map(|ts| ts.content.as_str()),
+                recent_messages: &context_messages,
+                user_message,
+                web_search_enabled: false, // P1: not yet wired from request
+                file_search_enabled: false, // P1: not yet wired from request
+                vector_store_ids: &[],
+            },
+        ))
+    }
+
     /// Run streaming for an already-created turn (used by retry/edit mutations).
     ///
     /// The mutation transaction has already created the turn (state=running) and
@@ -674,6 +795,7 @@ impl<
         turn_id: Uuid,
         content: String,
         resolved_model: ResolvedModel,
+        snapshot_boundary: Option<SnapshotBoundary>,
         cancel: CancellationToken,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<tokio::task::JoinHandle<StreamOutcome>, StreamError> {
@@ -749,7 +871,7 @@ impl<
 
         let finalization_ctx = FinalizationCtx {
             finalization_svc: Arc::clone(&self.finalization),
-            scope,
+            scope: scope.clone(),
             turn_id,
             tenant_id,
             chat_id,
@@ -769,6 +891,17 @@ impl<
             period_starts,
         };
 
+        // ── Context assembly ──
+        let assembled = self
+            .gather_context(
+                tenant_id,
+                chat_id,
+                snapshot_boundary,
+                &pf.system_prompt,
+                &content,
+            )
+            .await?;
+
         let resolved_provider = self.provider_resolver.resolve(&provider_id).map_err(|e| {
             StreamError::TurnCreationFailed {
                 source: DomainError::internal(format!("provider resolution: {e}")),
@@ -783,7 +916,9 @@ impl<
             resolved_provider.adapter,
             proxy_path,
             ctx,
-            content,
+            assembled.messages,
+            assembled.system_instructions,
+            assembled.tools,
             pf.effective_model,
             provider_model_id,
             pf.max_output_tokens_applied.cast_unsigned(),
@@ -813,7 +948,9 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
     llm: Arc<dyn LlmProvider>,
     upstream_alias: String,
     ctx: SecurityContext,
-    content: String,
+    messages: Vec<LlmMessage>,
+    system_instructions: Option<String>,
+    tools: Vec<LlmTool>,
     model: String,
     provider_model_id: String,
     max_output_tokens: u32,
@@ -839,10 +976,16 @@ fn spawn_provider_task<TR: TurnRepository + 'static, MR: MessageRepository + 'st
         let msg_id_str = fin_ctx.as_ref().map(|p| p.message_id.to_string());
 
         // Build the LLM request using provider_model_id (the actual provider-facing name)
-        let request = LlmRequestBuilder::new(&provider_model_id)
-            .message(LlmMessage::user(&content))
-            .max_output_tokens(u64::from(max_output_tokens))
-            .build_streaming();
+        let mut builder = LlmRequestBuilder::new(&provider_model_id)
+            .messages(messages)
+            .max_output_tokens(u64::from(max_output_tokens));
+        if let Some(instructions) = system_instructions {
+            builder = builder.system_instructions(instructions);
+        }
+        for tool in tools {
+            builder = builder.tool(tool);
+        }
+        let request = builder.build_streaming();
 
         // Call the provider to start streaming
         let stream_result = llm
@@ -1479,7 +1622,9 @@ mod tests {
             provider,
             "test-alias".to_owned(),
             mock_ctx(),
-            "hi".into(),
+            vec![LlmMessage::user("hi")],
+            None,
+            vec![],
             "test-model".into(),
             "test-model".into(),
             4096,
@@ -1525,7 +1670,9 @@ mod tests {
             provider,
             "test-alias".to_owned(),
             mock_ctx(),
-            "hi".into(),
+            vec![LlmMessage::user("hi")],
+            None,
+            vec![],
             "test-model".into(),
             "test-model".into(),
             4096,
@@ -1564,7 +1711,9 @@ mod tests {
             provider,
             "test-alias".to_owned(),
             mock_ctx(),
-            "hi".into(),
+            vec![LlmMessage::user("hi")],
+            None,
+            vec![],
             "test-model".into(),
             "test-model".into(),
             4096,
@@ -1652,7 +1801,9 @@ mod tests {
             provider,
             "test-alias".to_owned(),
             mock_ctx(),
-            "hi".into(),
+            vec![LlmMessage::user("hi")],
+            None,
+            vec![],
             "test-model".into(),
             "test-model".into(),
             4096,
@@ -1677,8 +1828,9 @@ mod tests {
     // ── Pre-stream check tests (7.6) ──
 
     use crate::domain::service::test_helpers::{
-        MockPolicySnapshotProvider, MockUserLimitsProvider, TestCatalogEntryParams, inmem_db,
-        mock_db_provider, mock_enforcer, test_catalog_entry, test_security_ctx_with_id,
+        MockPolicySnapshotProvider, MockThreadSummaryRepo, MockUserLimitsProvider,
+        TestCatalogEntryParams, inmem_db, mock_db_provider, mock_enforcer,
+        mock_thread_summary_repo, test_catalog_entry, test_security_ctx_with_id,
     };
     use crate::infra::db::repo::quota_usage_repo::QuotaUsageRepository as OrmQuotaUsageRepo;
 
@@ -1686,7 +1838,8 @@ mod tests {
     fn build_stream_service(
         db: Arc<DbProvider>,
         provider: Arc<dyn LlmProvider>,
-    ) -> StreamService<TurnRepo, MsgRepo, OrmQuotaUsageRepo, OrmChatRepo> {
+    ) -> StreamService<TurnRepo, MsgRepo, OrmQuotaUsageRepo, OrmChatRepo, MockThreadSummaryRepo>
+    {
         use crate::domain::service::finalization_service::FinalizationService;
         use crate::domain::service::quota_settler::QuotaSettler;
 
@@ -1787,6 +1940,8 @@ mod tests {
             crate::config::StreamingConfig::default(),
             finalization,
             quota_svc,
+            mock_thread_summary_repo(),
+            crate::config::ContextConfig::default(),
         )
     }
 
@@ -1826,6 +1981,7 @@ mod tests {
             description: None,
             multimodal_capabilities: vec![],
             context_window: 128_000,
+            system_prompt: String::new(),
         }
     }
 
@@ -2562,7 +2718,9 @@ mod tests {
             provider,
             "test-alias".to_owned(),
             mock_ctx(),
-            "hi".into(),
+            vec![LlmMessage::user("hi")],
+            None,
+            vec![],
             "gpt-4o-mini".into(), // effective_model passed as the model param
             "gpt-4o-mini".into(),
             4096,
@@ -2635,7 +2793,8 @@ mod tests {
         provider: Arc<dyn LlmProvider>,
         catalog: Vec<mini_chat_sdk::ModelCatalogEntry>,
         limits: mini_chat_sdk::UserLimits,
-    ) -> StreamService<TurnRepo, MsgRepo, OrmQuotaUsageRepo, OrmChatRepo> {
+    ) -> StreamService<TurnRepo, MsgRepo, OrmQuotaUsageRepo, OrmChatRepo, MockThreadSummaryRepo>
+    {
         use crate::domain::service::finalization_service::FinalizationService;
         use crate::domain::service::quota_settler::QuotaSettler;
 
@@ -2706,6 +2865,8 @@ mod tests {
             crate::config::StreamingConfig::default(),
             finalization,
             quota_svc,
+            mock_thread_summary_repo(),
+            crate::config::ContextConfig::default(),
         )
     }
 
@@ -2912,6 +3073,7 @@ mod tests {
                     description: None,
                     multimodal_capabilities: vec![],
                     context_window: 128_000,
+                    system_prompt: String::new(),
                 },
                 cancel,
                 tx,

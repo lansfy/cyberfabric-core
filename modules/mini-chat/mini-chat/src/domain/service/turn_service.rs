@@ -96,6 +96,9 @@ pub struct MutationResult {
     pub new_request_id: Uuid,
     pub new_turn_id: Uuid,
     pub user_content: String,
+    /// Snapshot boundary computed before the new user message was persisted.
+    /// Ensures deterministic context assembly (DESIGN `§ContextPlan` Determinism P1).
+    pub snapshot_boundary: Option<crate::domain::repos::SnapshotBoundary>,
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -275,7 +278,7 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
         let scope_tx = chat_scope.clone();
         let ctx_clone = ctx.clone();
 
-        let user_content = self
+        let (user_content, snapshot_boundary) = self
             .db
             .transaction(|tx| {
                 Box::pin(async move {
@@ -342,6 +345,13 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
                             modkit_db::DbError::Other(anyhow::Error::new(e))
                         })?;
 
+                    // Snapshot boundary: must be computed BEFORE inserting the new
+                    // user message so context queries exclude it (DESIGN §ContextPlan P1).
+                    let boundary = message_repo
+                        .snapshot_boundary(tx, &scope, chat_id)
+                        .await
+                        .map_err(|e| modkit_db::DbError::Other(anyhow::Error::new(e)))?;
+
                     // Insert user message for the new turn
                     message_repo
                         .insert_user_message(
@@ -358,7 +368,7 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
                         .await
                         .map_err(|e| modkit_db::DbError::Other(anyhow::Error::new(e)))?;
 
-                    Ok(user_content)
+                    Ok((user_content, boundary))
                 })
             })
             .await
@@ -368,6 +378,7 @@ impl<TR: TurnRepository + 'static, MR: MessageRepository + 'static, CR: ChatRepo
             new_request_id,
             new_turn_id,
             user_content,
+            snapshot_boundary,
         })
     }
 }

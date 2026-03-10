@@ -14,6 +14,8 @@ pub enum PreflightDecision {
         reserved_credits_micro: i64,
         policy_version_applied: i64,
         minimal_generation_floor_applied: i32,
+        /// System prompt for the effective model (from `ModelCatalogEntry`).
+        system_prompt: String,
     },
     Downgrade {
         effective_model: String,
@@ -24,6 +26,8 @@ pub enum PreflightDecision {
         minimal_generation_floor_applied: i32,
         downgrade_from: String,
         downgrade_reason: DowngradeReason,
+        /// System prompt for the effective model (from `ModelCatalogEntry`).
+        system_prompt: String,
     },
     Reject {
         error_code: String,

@@ -204,6 +204,39 @@ mod tests {
         {
             unimplemented!()
         }
+
+        async fn snapshot_boundary<C: DBRunner>(
+            &self,
+            _: &C,
+            _: &AccessScope,
+            _: Uuid,
+        ) -> Result<Option<crate::domain::repos::SnapshotBoundary>, DomainError> {
+            Ok(None)
+        }
+
+        async fn recent_for_context<C: DBRunner>(
+            &self,
+            _: &C,
+            _: &AccessScope,
+            _: Uuid,
+            _: u32,
+            _: Option<crate::domain::repos::SnapshotBoundary>,
+        ) -> Result<Vec<MessageModel>, DomainError> {
+            unimplemented!()
+        }
+
+        async fn recent_after_boundary<C: DBRunner>(
+            &self,
+            _: &C,
+            _: &AccessScope,
+            _: Uuid,
+            _: time::OffsetDateTime,
+            _: Uuid,
+            _: u32,
+            _: Option<crate::domain::repos::SnapshotBoundary>,
+        ) -> Result<Vec<MessageModel>, DomainError> {
+            unimplemented!()
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────

@@ -298,9 +298,21 @@ pub fn mock_model_resolver() -> Arc<dyn ModelResolver> {
     Arc::new(MockModelResolver::default())
 }
 
-pub fn mock_thread_summary_repo() -> Arc<dyn ThreadSummaryRepository> {
-    struct MockThreadSummaryRepo;
-    impl ThreadSummaryRepository for MockThreadSummaryRepo {}
+pub struct MockThreadSummaryRepo;
+#[async_trait::async_trait]
+impl ThreadSummaryRepository for MockThreadSummaryRepo {
+    async fn get_latest<C: modkit_db::secure::DBRunner>(
+        &self,
+        _runner: &C,
+        _scope: &modkit_security::AccessScope,
+        _chat_id: uuid::Uuid,
+    ) -> Result<Option<crate::domain::repos::ThreadSummaryModel>, crate::domain::error::DomainError>
+    {
+        Ok(None)
+    }
+}
+
+pub fn mock_thread_summary_repo() -> Arc<MockThreadSummaryRepo> {
     Arc::new(MockThreadSummaryRepo)
 }
 
@@ -433,6 +445,8 @@ pub fn test_catalog_entry(params: TestCatalogEntryParams) -> ModelCatalogEntry {
             is_default: params.is_default,
             sort_order: 0,
         },
+        system_prompt: String::new(),
+        thread_summary_prompt: String::new(),
     }
 }
 

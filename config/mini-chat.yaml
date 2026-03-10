@@ -177,6 +177,11 @@ modules:
           icon: ""
           tier: Premium
           enabled: true
+          # System prompt sent as `instructions` in every LLM request for this model.
+          # Omit or leave empty for no system instructions.
+          system_prompt: "You are a helpful, concise assistant. Answer clearly and directly."
+          # Prompt template for thread summary generation (future use).
+          # thread_summary_prompt: "Summarize the key points of this conversation."
           multimodal_capabilities: ["VISION_INPUT"]
           context_window: 1047576
           max_output_tokens: 32768
@@ -261,6 +266,7 @@ modules:
           icon: ""
           tier: Standard
           enabled: true
+          system_prompt: "You are a helpful, concise assistant. Answer clearly and directly."
           multimodal_capabilities: ["VISION_INPUT"]
           context_window: 1047576
           max_output_tokens: 32768

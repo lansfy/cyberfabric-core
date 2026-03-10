@@ -495,10 +495,15 @@ fn build_request_body<M>(request: &LlmRequest<M>, stream: bool) -> serde_json::V
                 // System messages are handled via the `instructions` field above.
                 crate::infra::llm::request::Role::System => unreachable!(),
             };
+            let is_assistant = role == "assistant";
             let content: Vec<serde_json::Value> = msg
                 .content
                 .iter()
                 .map(|part| match part {
+                    MessageContentPart::Text { text } if is_assistant => serde_json::json!({
+                        "type": "output_text",
+                        "text": text
+                    }),
                     MessageContentPart::Text { text } => serde_json::json!({
                         "type": "input_text",
                         "text": text

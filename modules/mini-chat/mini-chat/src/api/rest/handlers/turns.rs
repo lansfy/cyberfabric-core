@@ -203,6 +203,7 @@ async fn start_mutation_stream(
             mutation.new_turn_id,
             mutation.user_content,
             resolved,
+            mutation.snapshot_boundary,
             cancel.clone(),
             tx,
         )

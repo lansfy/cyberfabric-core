@@ -20,6 +20,8 @@ pub struct MiniChatConfig {
     pub quota: QuotaConfig,
     #[serde(default)]
     pub outbox: OutboxConfig,
+    #[serde(default)]
+    pub context: ContextConfig,
     /// Provider registry. Key = `provider_id` (matches [`ModelCatalogEntry::provider_id`]).
     #[expand_vars]
     #[serde(default = "default_providers")]
@@ -172,6 +174,7 @@ impl Default for MiniChatConfig {
             estimation_budgets: EstimationBudgets::default(),
             quota: QuotaConfig::default(),
             outbox: OutboxConfig::default(),
+            context: ContextConfig::default(),
             providers: default_providers(),
         }
     }
@@ -322,6 +325,57 @@ fn default_overshoot_tolerance() -> f64 {
     1.10
 }
 
+/// Context assembly configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextConfig {
+    /// Soft-guideline instruction appended to system prompt when `web_search` is enabled.
+    #[serde(default = "default_web_search_guard")]
+    pub web_search_guard: String,
+
+    /// Soft-guideline instruction appended to system prompt when `file_search` is enabled.
+    #[serde(default = "default_file_search_guard")]
+    pub file_search_guard: String,
+
+    /// Maximum number of recent messages to include in context. Range: 0–100.
+    #[serde(default = "default_recent_messages_limit")]
+    pub recent_messages_limit: u32,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            web_search_guard: default_web_search_guard(),
+            file_search_guard: default_file_search_guard(),
+            recent_messages_limit: default_recent_messages_limit(),
+        }
+    }
+}
+
+impl ContextConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.recent_messages_limit > 100 {
+            return Err(format!(
+                "context recent_messages_limit must be 0-100, got {}",
+                self.recent_messages_limit
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn default_web_search_guard() -> String {
+    "Use web_search only if the answer cannot be obtained from the provided context or your training data. Never use it for general knowledge questions. At most one web_search call per request.".to_owned()
+}
+
+fn default_file_search_guard() -> String {
+    "Use file_search to find relevant information in the user's uploaded documents. Prefer file_search over general knowledge when documents are available.".to_owned()
+}
+
+fn default_recent_messages_limit() -> u32 {
+    10
+}
+
 fn default_url_prefix() -> String {
     DEFAULT_URL_PREFIX.to_owned()
 }
@@ -340,6 +394,7 @@ mod tests {
         EstimationBudgets::default().validate().unwrap();
         QuotaConfig::default().validate().unwrap();
         OutboxConfig::default().validate().unwrap();
+        ContextConfig::default().validate().unwrap();
     }
 
     #[test]

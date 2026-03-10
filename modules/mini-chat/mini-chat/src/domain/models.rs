@@ -161,6 +161,9 @@ pub struct ResolvedModel {
     pub description: Option<String>,
     pub multimodal_capabilities: Vec<String>,
     pub context_window: u32,
+    /// System prompt sent as `instructions` in every LLM request for this model.
+    /// Sourced from `ModelCatalogEntry.system_prompt` (per-model, per-policy-version).
+    pub system_prompt: String,
 }
 
 impl From<&mini_chat_sdk::ModelCatalogEntry> for ResolvedModel {
@@ -182,6 +185,7 @@ impl From<&mini_chat_sdk::ModelCatalogEntry> for ResolvedModel {
             },
             multimodal_capabilities: e.multimodal_capabilities.clone(),
             context_window: e.context_window,
+            system_prompt: e.system_prompt.clone(),
         }
     }
 }

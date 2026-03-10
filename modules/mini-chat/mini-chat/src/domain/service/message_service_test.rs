@@ -14,8 +14,8 @@ use crate::domain::repos::{
     InsertAssistantMessageParams, InsertUserMessageParams, MessageRepository as MessageRepoTrait,
 };
 use crate::domain::service::test_helpers::{
-    inmem_db, mock_db_provider, mock_enforcer, mock_model_resolver, mock_thread_summary_repo,
-    test_security_ctx,
+    MockThreadSummaryRepo, inmem_db, mock_db_provider, mock_enforcer, mock_model_resolver,
+    mock_thread_summary_repo, test_security_ctx,
 };
 use crate::infra::db::entity::attachment::{ActiveModel as AttAm, Entity as AttEntity};
 use crate::infra::db::entity::message_attachment::{ActiveModel as MaAm, Entity as MaEntity};
@@ -37,7 +37,7 @@ fn limit_cfg() -> modkit_db::odata::LimitCfg {
 fn build_chat_service(
     db_provider: Arc<crate::domain::service::DbProvider>,
     chat_repo: Arc<OrmChatRepository>,
-) -> ChatService<OrmChatRepository> {
+) -> ChatService<OrmChatRepository, MockThreadSummaryRepo> {
     ChatService::new(
         db_provider,
         chat_repo,
