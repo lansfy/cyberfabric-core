@@ -9,14 +9,15 @@
 //!   1. Registration  →  2. Enqueue  →  3. Sequencer
 //!   4. Transactional Processing  →  5. Decoupled Processing
 //!   6. Crash Detection & Recovery  →  7. Backoff & Adaptive Batching
-//!   8. Reaper  →  9. Dead Letters  →  10. Builder API
+//!   8. Vacuum  →  9. Dead Letters  →  10. Builder API
 //!   11. End-to-End Lifecycle
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement, TransactionTrait};
+use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use super::dead_letter::{DeadLetterFilter, DeadLetterScope};
@@ -109,6 +110,7 @@ fn make_sequencer(t: &TestOutbox, config: SequencerConfig) -> Sequencer {
         config,
         Arc::clone(&t.outbox),
         Arc::clone(&t.sequencer_notify),
+        Arc::new(Semaphore::new(64)),
     )
 }
 
@@ -1073,6 +1075,8 @@ async fn run_transactional(
         backend,
         dialect,
         partition_id,
+        #[cfg(feature = "outbox-profiler")]
+        profiler: None,
     };
     strategy
         .process(&ctx, config, CancellationToken::new())
@@ -1205,6 +1209,8 @@ async fn run_decoupled(
         backend,
         dialect,
         partition_id,
+        #[cfg(feature = "outbox-profiler")]
+        profiler: None,
     };
     strategy
         .process(&ctx, config, CancellationToken::new())
@@ -1558,11 +1564,12 @@ async fn adaptive_batch_isolates_poison_message() {
 }
 
 // ======================================================================
-// Chapter 8: Reaper
+// Chapter 8: Vacuum
 // ======================================================================
 
-/// Run the reaper by processing an empty partition (reaper triggers on idle).
-async fn run_reaper(db: &Db, partition_id: i64) {
+/// Run the vacuum for a single partition: read `processed_seq`, delete
+/// outgoing + body rows in batches, then reset the vacuum counter.
+async fn run_vacuum(db: &Db, partition_id: i64) {
     #[derive(Debug, FromQueryResult)]
     struct ProcRow {
         processed_seq: i64,
@@ -1586,55 +1593,62 @@ async fn run_reaper(db: &Db, partition_id: i64) {
         return;
     }
 
-    let txn = conn.begin().await.unwrap();
-    match dialect.reaper_cleanup() {
-        super::dialect::ReaperSql::Cte(sql) => {
-            txn.execute(Statement::from_sql_and_values(
+    let vacuum_sql = dialect.vacuum_cleanup();
+
+    // Fetch outgoing rows in bounded chunks.
+    loop {
+        let rows = conn
+            .query_all(Statement::from_sql_and_values(
                 backend,
-                sql,
-                [partition_id.into(), proc_row.processed_seq.into()],
+                vacuum_sql.select_outgoing_chunk,
+                [
+                    partition_id.into(),
+                    proc_row.processed_seq.into(),
+                    10_000i64.into(),
+                ],
             ))
             .await
             .unwrap();
+        if rows.is_empty() {
+            break;
         }
-        super::dialect::ReaperSql::TwoStep {
-            select_body_ids,
-            delete_outgoing,
-        } => {
-            let rows = txn
-                .query_all(Statement::from_sql_and_values(
-                    backend,
-                    select_body_ids,
-                    [partition_id.into(), proc_row.processed_seq.into()],
-                ))
+        let outgoing_ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|r| r.try_get_by_index::<i64>(0).ok())
+            .collect();
+        let body_ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|r| r.try_get_by_index::<i64>(1).ok())
+            .collect();
+        // Delete outgoing by ID
+        let del_out = dialect.build_delete_outgoing_batch(outgoing_ids.len());
+        let values: Vec<sea_orm::Value> = outgoing_ids.iter().map(|&id| id.into()).collect();
+        conn.execute(Statement::from_sql_and_values(backend, &del_out, values))
+            .await
+            .unwrap();
+        // Delete body by ID
+        if !body_ids.is_empty() {
+            let del_body = dialect.build_delete_body_batch(body_ids.len());
+            let values: Vec<sea_orm::Value> = body_ids.iter().map(|&id| id.into()).collect();
+            conn.execute(Statement::from_sql_and_values(backend, &del_body, values))
                 .await
                 .unwrap();
-            let body_ids: Vec<i64> = rows
-                .iter()
-                .filter_map(|r| r.try_get_by_index::<i64>(0).ok())
-                .collect();
-            txn.execute(Statement::from_sql_and_values(
-                backend,
-                delete_outgoing,
-                [partition_id.into(), proc_row.processed_seq.into()],
-            ))
-            .await
-            .unwrap();
-            if !body_ids.is_empty() {
-                let sql = dialect.build_delete_body_batch(body_ids.len());
-                let values: Vec<sea_orm::Value> = body_ids.iter().map(|&id| id.into()).collect();
-                txn.execute(Statement::from_sql_and_values(backend, &sql, values))
-                    .await
-                    .unwrap();
-            }
         }
     }
-    txn.commit().await.unwrap();
+
+    // Reset vacuum counter after cleanup.
+    conn.execute(Statement::from_sql_and_values(
+        backend,
+        dialect.reset_vacuum_counter(),
+        [partition_id.into()],
+    ))
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
-async fn reaper_deletes_processed_outgoing_and_body_rows() {
-    let db = setup_db("ch8_reaper_deletes").await;
+async fn vacuum_deletes_processed_outgoing_and_body_rows() {
+    let db = setup_db("ch8_vacuum_deletes").await;
     let t = make_default_test_outbox();
     t.outbox.register_queue(&db, "q", 1).await.unwrap();
     let pid = t.outbox.all_partition_ids()[0];
@@ -1658,7 +1672,7 @@ async fn reaper_deletes_processed_outgoing_and_body_rows() {
     .await;
 
     // Reap
-    run_reaper(&db, pid).await;
+    run_vacuum(&db, pid).await;
 
     assert_eq!(count_rows(&db, "modkit_outbox_outgoing").await, 0);
     assert_eq!(count_rows(&db, "modkit_outbox_body").await, 0);
@@ -1668,8 +1682,8 @@ async fn reaper_deletes_processed_outgoing_and_body_rows() {
 }
 
 #[tokio::test]
-async fn reaper_skips_when_processed_seq_is_zero() {
-    let db = setup_db("ch8_reaper_skip").await;
+async fn vacuum_skips_when_processed_seq_is_zero() {
+    let db = setup_db("ch8_vacuum_skip").await;
     let t = make_default_test_outbox();
     t.outbox.register_queue(&db, "q", 1).await.unwrap();
     let pid = t.outbox.all_partition_ids()[0];
@@ -1677,7 +1691,7 @@ async fn reaper_skips_when_processed_seq_is_zero() {
     enqueue_and_sequence(&t, &db, "q", 0, &["a"]).await;
 
     // Don't process — cursor at 0
-    run_reaper(&db, pid).await;
+    run_vacuum(&db, pid).await;
 
     assert_eq!(
         count_rows(&db, "modkit_outbox_outgoing").await,
@@ -1687,8 +1701,8 @@ async fn reaper_skips_when_processed_seq_is_zero() {
 }
 
 #[tokio::test]
-async fn reaper_preserves_unprocessed_rows() {
-    let db = setup_db("ch8_reaper_preserves").await;
+async fn vacuum_preserves_unprocessed_rows() {
+    let db = setup_db("ch8_vacuum_preserves").await;
     let t = make_default_test_outbox();
     t.outbox.register_queue(&db, "q", 1).await.unwrap();
     let pid = t.outbox.all_partition_ids()[0];
@@ -1715,7 +1729,7 @@ async fn reaper_preserves_unprocessed_rows() {
     assert_eq!(snap.processed_seq, 3);
 
     // Reap — should only delete seqs 1-3
-    run_reaper(&db, pid).await;
+    run_vacuum(&db, pid).await;
 
     let remaining = read_outgoing(&db, pid).await;
     assert_eq!(remaining.len(), 2);
@@ -1725,6 +1739,179 @@ async fn reaper_preserves_unprocessed_rows() {
         assert_eq!(row.partition_id, pid);
         assert!(row.id > 0);
         assert!(row.body_id > 0);
+    }
+}
+
+/// Read the vacuum counter for a partition.
+async fn read_vacuum_counter(db: &Db, partition_id: i64) -> i64 {
+    #[derive(Debug, FromQueryResult)]
+    struct Row {
+        counter: i64,
+    }
+    let conn = db.sea_internal();
+    Row::find_by_statement(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "SELECT counter FROM modkit_outbox_vacuum_counter WHERE partition_id = $1",
+        [partition_id.into()],
+    ))
+    .one(&conn)
+    .await
+    .expect("query")
+    .expect("vacuum counter row")
+    .counter
+}
+
+/// Set the vacuum counter to an arbitrary value (test helper).
+async fn set_vacuum_counter(db: &Db, partition_id: i64, value: i64) {
+    let conn = db.sea_internal();
+    conn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "UPDATE modkit_outbox_vacuum_counter SET counter = $1 WHERE partition_id = $2",
+        [value.into(), partition_id.into()],
+    ))
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn vacuum_counter_bumped_on_processed_seq_advance() {
+    let db = setup_db("ch8_counter_bump").await;
+    let t = make_default_test_outbox();
+    t.outbox.register_queue(&db, "q", 1).await.unwrap();
+    let pid = t.outbox.all_partition_ids()[0];
+
+    // Counter starts at 0.
+    assert_eq!(read_vacuum_counter(&db, pid).await, 0);
+
+    enqueue_and_sequence(&t, &db, "q", 0, &["a", "b"]).await;
+
+    // Process batch of 2 — counter should bump once (one ack).
+    let count = Arc::new(AtomicU32::new(0));
+    let config = QueueConfig {
+        msg_batch_size: 2,
+        ..Default::default()
+    };
+    run_decoupled(
+        &db,
+        pid,
+        CountingSuccessHandler {
+            count: count.clone(),
+        },
+        &config,
+    )
+    .await;
+
+    assert_eq!(read_vacuum_counter(&db, pid).await, 1);
+
+    // Process again (no messages) — counter should not change.
+    run_decoupled(
+        &db,
+        pid,
+        CountingSuccessHandler {
+            count: count.clone(),
+        },
+        &config,
+    )
+    .await;
+
+    assert_eq!(read_vacuum_counter(&db, pid).await, 1);
+}
+
+#[tokio::test]
+async fn vacuum_counter_preserves_concurrent_bumps() {
+    let db = setup_db("ch8_counter_concurrent").await;
+    let t = make_default_test_outbox();
+    t.outbox.register_queue(&db, "q", 1).await.unwrap();
+    let pid = t.outbox.all_partition_ids()[0];
+
+    enqueue_and_sequence(&t, &db, "q", 0, &["a", "b", "c"]).await;
+
+    // Process all 3 — counter = 1 (one ack of batch=3).
+    let count = Arc::new(AtomicU32::new(0));
+    let config = QueueConfig {
+        msg_batch_size: 3,
+        ..Default::default()
+    };
+    run_decoupled(
+        &db,
+        pid,
+        CountingSuccessHandler {
+            count: count.clone(),
+        },
+        &config,
+    )
+    .await;
+
+    assert_eq!(read_vacuum_counter(&db, pid).await, 1);
+
+    // Simulate a concurrent processor bump (as if more messages were processed
+    // while vacuum was running): manually set counter to 3.
+    set_vacuum_counter(&db, pid, 3).await;
+
+    // Vacuum with snapshot_counter=3 — deletes rows, decrements by 3.
+    // After decrement: counter = GREATEST(3 - 3, 0) = 0.
+    run_vacuum(&db, pid).await;
+
+    assert_eq!(count_rows(&db, "modkit_outbox_outgoing").await, 0);
+    assert_eq!(read_vacuum_counter(&db, pid).await, 0);
+}
+
+#[tokio::test]
+async fn vacuum_stale_counter_reset() {
+    let db = setup_db("ch8_stale_counter").await;
+    let t = make_default_test_outbox();
+    t.outbox.register_queue(&db, "q", 1).await.unwrap();
+    let pid = t.outbox.all_partition_ids()[0];
+
+    // Create and process a message so processed_seq > 0.
+    enqueue_and_sequence(&t, &db, "q", 0, &["a"]).await;
+    let count = Arc::new(AtomicU32::new(0));
+    let config = QueueConfig::default();
+    run_decoupled(
+        &db,
+        pid,
+        CountingSuccessHandler {
+            count: count.clone(),
+        },
+        &config,
+    )
+    .await;
+
+    // Vacuum to clean up — counter goes to 0.
+    run_vacuum(&db, pid).await;
+    assert_eq!(read_vacuum_counter(&db, pid).await, 0);
+    assert_eq!(count_rows(&db, "modkit_outbox_outgoing").await, 0);
+
+    // Simulate stale counter (as if crash prevented decrement).
+    set_vacuum_counter(&db, pid, 5).await;
+
+    // Vacuum runs again: processed_seq > 0 but no outgoing rows → stale.
+    // The run_vacuum helper resets counter after cleanup (0 rows deleted).
+    run_vacuum(&db, pid).await;
+
+    assert_eq!(read_vacuum_counter(&db, pid).await, 0);
+}
+
+#[tokio::test]
+async fn vacuum_counter_row_created_on_register_queue() {
+    let db = setup_db("ch8_counter_register").await;
+    let t = make_default_test_outbox();
+    t.outbox.register_queue(&db, "q", 2).await.unwrap();
+
+    let pids = t.outbox.all_partition_ids();
+    assert_eq!(pids.len(), 2);
+
+    // Both partitions should have vacuum counter rows with counter = 0.
+    for &pid in &pids {
+        assert_eq!(read_vacuum_counter(&db, pid).await, 0);
+    }
+
+    // Re-register (idempotent) — should not fail.
+    t.outbox.register_queue(&db, "q", 2).await.unwrap();
+
+    // Counters still 0.
+    for &pid in &pids {
+        assert_eq!(read_vacuum_counter(&db, pid).await, 0);
     }
 }
 
@@ -2089,7 +2276,7 @@ async fn e2e_happy_path_enqueue_through_reap() {
         &config,
     )
     .await;
-    run_reaper(&db, pid).await;
+    run_vacuum(&db, pid).await;
 
     assert_eq!(count_rows(&db, "modkit_outbox_incoming").await, 0);
     assert_eq!(count_rows(&db, "modkit_outbox_outgoing").await, 0);

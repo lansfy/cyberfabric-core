@@ -38,6 +38,7 @@ impl MigrationTrait for CreateOutboxSchema {
         create_outgoing(conn, backend).await?;
         create_dead_letters(conn, backend).await?;
         create_processor(conn, backend).await?;
+        create_vacuum_counter(conn, backend).await?;
 
         Ok(())
     }
@@ -47,6 +48,7 @@ impl MigrationTrait for CreateOutboxSchema {
         let backend = conn.get_database_backend();
 
         for table in [
+            "modkit_outbox_vacuum_counter",
             "modkit_outbox_processor",
             "modkit_outbox_dead_letters",
             "modkit_outbox_outgoing",
@@ -185,6 +187,19 @@ async fn create_incoming(
         },
     ))
     .await?;
+
+    // Index on body_id to accelerate FK constraint checks during
+    // DELETE FROM modkit_outbox_body WHERE id IN (...).
+    conn.execute(Statement::from_string(
+        backend,
+        match backend {
+            DatabaseBackend::Postgres | DatabaseBackend::Sqlite | DatabaseBackend::MySql => {
+                "CREATE INDEX idx_modkit_outbox_incoming_body_id \
+             ON modkit_outbox_incoming (body_id)"
+            }
+        },
+    ))
+    .await?;
     Ok(())
 }
 
@@ -237,6 +252,19 @@ async fn create_outgoing(
             DatabaseBackend::Postgres | DatabaseBackend::Sqlite | DatabaseBackend::MySql => {
                 "CREATE UNIQUE INDEX idx_modkit_outbox_outgoing_partition_seq \
              ON modkit_outbox_outgoing (partition_id, seq)"
+            }
+        },
+    ))
+    .await?;
+
+    // Index on body_id to accelerate FK constraint checks during
+    // DELETE FROM modkit_outbox_body WHERE id IN (...).
+    conn.execute(Statement::from_string(
+        backend,
+        match backend {
+            DatabaseBackend::Postgres | DatabaseBackend::Sqlite | DatabaseBackend::MySql => {
+                "CREATE INDEX idx_modkit_outbox_outgoing_body_id \
+             ON modkit_outbox_outgoing (body_id)"
             }
         },
     ))
@@ -374,6 +402,40 @@ async fn create_processor(
                 last_error    TEXT,
                 locked_by     TEXT,
                 locked_until  TIMESTAMP(6) NULL,
+                FOREIGN KEY (partition_id) REFERENCES modkit_outbox_partitions(id)
+            )"
+            }
+        },
+    ))
+    .await?;
+    Ok(())
+}
+
+async fn create_vacuum_counter(
+    conn: &dyn ConnectionTrait,
+    backend: DatabaseBackend,
+) -> Result<(), DbErr> {
+    conn.execute(Statement::from_string(
+        backend,
+        match backend {
+            DatabaseBackend::Postgres => {
+                "CREATE TABLE IF NOT EXISTS modkit_outbox_vacuum_counter (
+                partition_id BIGINT PRIMARY KEY
+                    REFERENCES modkit_outbox_partitions(id),
+                counter      BIGINT NOT NULL DEFAULT 0
+            )"
+            }
+            DatabaseBackend::Sqlite => {
+                "CREATE TABLE IF NOT EXISTS modkit_outbox_vacuum_counter (
+                partition_id INTEGER PRIMARY KEY
+                    REFERENCES modkit_outbox_partitions(id),
+                counter      INTEGER NOT NULL DEFAULT 0
+            )"
+            }
+            DatabaseBackend::MySql => {
+                "CREATE TABLE IF NOT EXISTS modkit_outbox_vacuum_counter (
+                partition_id BIGINT PRIMARY KEY,
+                counter      BIGINT NOT NULL DEFAULT 0,
                 FOREIGN KEY (partition_id) REFERENCES modkit_outbox_partitions(id)
             )"
             }

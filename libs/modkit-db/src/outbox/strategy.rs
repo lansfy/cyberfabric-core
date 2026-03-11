@@ -14,6 +14,9 @@ pub struct ProcessContext<'a> {
     pub backend: DbBackend,
     pub dialect: Dialect,
     pub partition_id: i64,
+    #[cfg(feature = "outbox-profiler")]
+    #[allow(dead_code)] // available for strategies to instrument inner queries
+    pub profiler: Option<std::sync::Arc<super::profiler::QueryProfiler>>,
 }
 
 /// Sealed trait for compile-time processing mode dispatch.
@@ -128,7 +131,7 @@ async fn read_messages(
 }
 
 /// Append-only ack: only UPDATE `processed_seq`, no DELETEs.
-/// Reaper handles cleanup of processed outgoing + body rows.
+/// Vacuum handles cleanup of processed outgoing + body rows.
 async fn ack(
     txn: &impl ConnectionTrait,
     backend: DbBackend,
@@ -145,6 +148,12 @@ async fn ack(
                 backend,
                 dialect.advance_processed_seq(),
                 [last_seq.into(), partition_id.into()],
+            ))
+            .await?;
+            txn.execute(Statement::from_sql_and_values(
+                backend,
+                dialect.bump_vacuum_counter(),
+                [partition_id.into()],
             ))
             .await?;
         }
@@ -178,6 +187,12 @@ async fn ack(
                 backend,
                 dialect.advance_processed_seq(),
                 [last_seq.into(), partition_id.into()],
+            ))
+            .await?;
+            txn.execute(Statement::from_sql_and_values(
+                backend,
+                dialect.bump_vacuum_counter(),
+                [partition_id.into()],
             ))
             .await?;
         }
@@ -423,6 +438,13 @@ impl ProcessingStrategy for DecoupledStrategy {
                     ack_txn.commit().await?;
                     return Ok(None);
                 }
+                ack_txn
+                    .execute(Statement::from_sql_and_values(
+                        ctx.backend,
+                        ctx.dialect.bump_vacuum_counter(),
+                        [ctx.partition_id.into()],
+                    ))
+                    .await?;
             }
             HandlerResult::Retry { reason } => {
                 // Retry: cursor not advanced — the same batch will be re-read.
@@ -493,6 +515,13 @@ impl ProcessingStrategy for DecoupledStrategy {
                     ack_txn.commit().await?;
                     return Ok(None);
                 }
+                ack_txn
+                    .execute(Statement::from_sql_and_values(
+                        ctx.backend,
+                        ctx.dialect.bump_vacuum_counter(),
+                        [ctx.partition_id.into()],
+                    ))
+                    .await?;
             }
         }
 

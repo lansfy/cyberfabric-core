@@ -314,6 +314,53 @@ test-db: test-sqlite test-pg test-mysql
 test-users-info-pg:
 	cargo test -p users-info --features "integration" -- --nocapture
 
+# -------- Benchmarks --------
+
+.PHONY: bench-pg bench-pg-profiler bench-mysql bench-mariadb bench-sqlite bench-db \
+       bench-pg-longhaul bench-mysql-longhaul bench-mariadb-longhaul bench-sqlite-longhaul bench-db-longhaul
+
+## Run outbox throughput benchmarks against PostgreSQL
+bench-pg:
+	cargo bench -p cf-modkit-db --features pg,preview-outbox --bench outbox_throughput -- postgres
+
+## Run outbox benchmarks against PostgreSQL with query profiler (logs → /tmp/outbox_bench.log)
+bench-pg-profiler:
+	RUST_LOG=info cargo bench -p cf-modkit-db --features pg,outbox-profiler --bench outbox_throughput -- postgres
+
+## Run outbox throughput benchmarks against MySQL
+bench-mysql:
+	cargo bench -p cf-modkit-db --features mysql,preview-outbox --bench outbox_throughput -- mysql
+
+## Run outbox throughput benchmarks against MariaDB
+bench-mariadb:
+	cargo bench -p cf-modkit-db --features mysql,preview-outbox --bench outbox_throughput -- mariadb
+
+## Run outbox throughput benchmarks against SQLite
+bench-sqlite:
+	cargo bench -p cf-modkit-db --features sqlite,preview-outbox --bench outbox_throughput -- sqlite
+
+## Run outbox throughput benchmarks against all database engines
+bench-db: bench-pg bench-mysql bench-mariadb bench-sqlite
+
+## Run long-haul (1M+10M) outbox benchmarks against PostgreSQL
+bench-pg-longhaul:
+	cargo bench -p cf-modkit-db --features pg,preview-outbox --bench outbox_throughput -- postgres_longhaul
+
+## Run long-haul (1M+10M) outbox benchmarks against MySQL
+bench-mysql-longhaul:
+	cargo bench -p cf-modkit-db --features mysql,preview-outbox --bench outbox_throughput -- mysql_longhaul
+
+## Run long-haul (1M+10M) outbox benchmarks against MariaDB
+bench-mariadb-longhaul:
+	cargo bench -p cf-modkit-db --features mysql,preview-outbox --bench outbox_throughput -- mariadb_longhaul
+
+## Run long-haul (100K 1P) outbox benchmarks against SQLite
+bench-sqlite-longhaul:
+	cargo bench -p cf-modkit-db --features sqlite,preview-outbox --bench outbox_throughput -- sqlite_longhaul
+
+## Run long-haul outbox benchmarks against all database engines
+bench-db-longhaul: bench-pg-longhaul bench-mysql-longhaul bench-mariadb-longhaul bench-sqlite-longhaul
+
 # -------- E2E tests --------
 
 .PHONY: e2e e2e-local e2e-local-smoke e2e-docker e2e-docker-smoke

@@ -148,6 +148,21 @@ pub struct QueueConfig {
     pub backoff_max: Duration,
 }
 
+/// Default vacuum cooldown: 1 hour.
+pub const DEFAULT_VACUUM_COOLDOWN: Duration = Duration::from_secs(3600);
+
+/// Maintenance connection budget for the outbox pipeline.
+///
+/// The sequencer and vacuum share a semaphore pool of `concurrency`
+/// permits for DB operations.
+#[derive(Debug, Clone)]
+pub struct MaintenanceConfig {
+    /// Total shared maintenance semaphore permits.
+    pub concurrency: usize,
+    /// Minimum interval between full vacuum sweeps. Default: 1h.
+    pub vacuum_cooldown: Duration,
+}
+
 impl Default for QueueConfig {
     fn default() -> Self {
         Self {

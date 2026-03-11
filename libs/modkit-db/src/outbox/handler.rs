@@ -23,7 +23,7 @@ pub struct OutboxMessage {
 pub enum HandlerResult {
     /// All messages processed successfully. The processor advances the cursor
     /// past the last message. Processed outgoing and body rows are cleaned up
-    /// asynchronously by the reaper.
+    /// asynchronously by the vacuum.
     Success,
     /// Transient failure. The cursor is not advanced; the same batch will be
     /// retried with exponential backoff. The `attempts` counter is incremented.

@@ -44,6 +44,24 @@ impl QueueBuilder {
     }
 
     /// Max partitions processed concurrently within this queue.
+    ///
+    /// Each active partition processor acquires a DB connection from the pool,
+    /// so this value must be aligned with the connection pool size.  A safe
+    /// lower-bound for the pool is:
+    ///
+    /// ```text
+    /// max_connections >= max_concurrent_partitions
+    ///                  + producer_threads
+    ///                  + maintenance_total  (sequencer + vacuum share this)
+    ///                  + 1                  (sequencer batch processing)
+    /// ```
+    ///
+    /// The `maintenance_total` budget is a shared semaphore pool configured
+    /// via [`OutboxBuilder::maintenance(high, low)`]. The semaphore pool
+    /// is sized at `high + low`. Low-priority tasks (vacuum) are capped
+    /// to `low` permits, ensuring `high` permits remain for the sequencer.
+    ///
+    /// Defaults to `usize::MAX` (all partitions may run concurrently).
     #[must_use]
     pub fn max_concurrent_partitions(mut self, n: usize) -> Self {
         self.config.max_concurrent_partitions = n;
@@ -103,17 +121,25 @@ impl QueueBuilder {
         let handler = Arc::new(handler);
         let config = self.config.clone();
 
-        let make_spawn_fn: DeferredSpawnFactory = Box::new(move |pid, _outbox| {
+        let make_spawn_fn: DeferredSpawnFactory = Box::new(move |pid, outbox| {
             let strategy =
                 TransactionalStrategy::new(Box::new(ArcTransactionalHandler(Arc::clone(&handler))));
             let config = config.clone();
+            #[cfg(feature = "outbox-profiler")]
+            let profiler = outbox.profiler_arc();
+            let _ = &outbox; // suppress unused warning when profiler feature is off
 
             Box::new(
                 move |db: Db,
                       cancel: CancellationToken,
                       notify: Arc<Notify>,
                       sem: Arc<Semaphore>| {
-                    let processor = PartitionProcessor::new(strategy, pid, config, notify, sem);
+                    #[allow(unused_mut)]
+                    let mut processor = PartitionProcessor::new(strategy, pid, config, notify, sem);
+                    #[cfg(feature = "outbox-profiler")]
+                    if let Some(p) = profiler {
+                        processor.set_profiler(p);
+                    }
                     tokio::spawn(async move {
                         if let Err(e) = processor.run(&db, cancel).await {
                             tracing::error!(error = %e, partition_id = pid, "partition processor exited with error");
@@ -140,18 +166,26 @@ impl QueueBuilder {
         let config = self.config.clone();
         let queue_name = self.name.clone();
 
-        let make_spawn_fn: DeferredSpawnFactory = Box::new(move |pid, _outbox| {
+        let make_spawn_fn: DeferredSpawnFactory = Box::new(move |pid, outbox| {
             let worker_id = generate_worker_id(&queue_name);
             let strategy =
                 DecoupledStrategy::new(Box::new(ArcHandler(Arc::clone(&handler))), worker_id);
             let config = config.clone();
+            #[cfg(feature = "outbox-profiler")]
+            let profiler = outbox.profiler_arc();
+            let _ = &outbox;
 
             Box::new(
                 move |db: Db,
                       cancel: CancellationToken,
                       notify: Arc<Notify>,
                       sem: Arc<Semaphore>| {
-                    let processor = PartitionProcessor::new(strategy, pid, config, notify, sem);
+                    #[allow(unused_mut)]
+                    let mut processor = PartitionProcessor::new(strategy, pid, config, notify, sem);
+                    #[cfg(feature = "outbox-profiler")]
+                    if let Some(p) = profiler {
+                        processor.set_profiler(p);
+                    }
                     tokio::spawn(async move {
                         if let Err(e) = processor.run(&db, cancel).await {
                             tracing::error!(error = %e, partition_id = pid, "partition processor exited with error");

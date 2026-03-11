@@ -11,8 +11,8 @@
 //! 3. **Processor** — one long-lived task per partition reads from `outgoing`,
 //!    dispatches to the registered handler, and acks via cursor advance
 //!    (append-only — no deletes on the hot path).
-//! 4. **Reaper** — when a partition is idle, the processor bulk-deletes
-//!    processed outgoing and body rows.
+//! 4. **Vacuum** — a standalone background task (peer of the sequencer) that
+//!    garbage-collects processed outgoing and body rows across dirty partitions.
 //!
 //! # Processing modes
 //!
@@ -95,6 +95,10 @@ mod processor;
 mod sequencer;
 mod strategy;
 mod types;
+mod vacuum;
+
+#[cfg(feature = "outbox-profiler")]
+pub mod profiler;
 
 #[cfg(test)]
 #[cfg(feature = "sqlite")]

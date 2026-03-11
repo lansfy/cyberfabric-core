@@ -1,19 +1,15 @@
 use std::sync::Arc;
 
-use sea_orm::{ConnectionTrait, DbBackend, Statement, TransactionTrait};
+use sea_orm::ConnectionTrait;
 use tokio::sync::{Notify, Semaphore};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::dialect::{Dialect, ReaperSql};
 use super::handler::HandlerResult;
 use super::strategy::{ProcessContext, ProcessingStrategy};
 use super::types::{OutboxError, QueueConfig};
 use crate::Db;
-
-/// Max body IDs per batched DELETE in the reaper.
-const REAPER_CHUNK_SIZE: usize = 100;
 
 /// Per-partition adaptive batch sizing state machine.
 ///
@@ -100,6 +96,8 @@ pub struct PartitionProcessor<S: ProcessingStrategy> {
     semaphore: Arc<Semaphore>,
     backoff_until: Option<Instant>,
     partition_mode: PartitionMode,
+    #[cfg(feature = "outbox-profiler")]
+    profiler: Option<std::sync::Arc<super::profiler::QueryProfiler>>,
 }
 
 impl<S: ProcessingStrategy> PartitionProcessor<S> {
@@ -118,15 +116,27 @@ impl<S: ProcessingStrategy> PartitionProcessor<S> {
             semaphore,
             backoff_until: None,
             partition_mode: PartitionMode::Normal,
+            #[cfg(feature = "outbox-profiler")]
+            profiler: None,
         }
     }
 
+    /// Attach a query profiler.
+    #[cfg(feature = "outbox-profiler")]
+    pub fn set_profiler(&mut self, profiler: std::sync::Arc<super::profiler::QueryProfiler>) {
+        self.profiler = Some(profiler);
+    }
+
     /// Main event loop. Runs until `cancel` fires.
+    ///
+    /// Pure delivery loop: read → handler → ack → wait. Vacuum logic has been
+    /// extracted into a separate `VacuumTask`.
     pub async fn run(mut self, db: &Db, cancel: CancellationToken) -> Result<(), OutboxError> {
-        let sea_conn = db.sea_internal();
-        let backend = sea_conn.get_database_backend();
-        let dialect = Dialect::from(backend);
-        drop(sea_conn);
+        let (backend, dialect) = {
+            let sea_conn = db.sea_internal();
+            let b = sea_conn.get_database_backend();
+            (b, super::dialect::Dialect::from(b))
+        };
 
         let mut has_more = false;
         loop {
@@ -163,15 +173,26 @@ impl<S: ProcessingStrategy> PartitionProcessor<S> {
                 .effective_batch_size(self.config.msg_batch_size);
 
             let result = {
+                #[cfg(feature = "outbox-profiler")]
+                let sem_guard = self
+                    .profiler
+                    .as_ref()
+                    .map(|p| p.measure(super::profiler::Op::SemaphoreWait));
+
                 let Ok(_permit) = self.semaphore.acquire().await else {
                     break; // semaphore closed — shut down
                 };
+
+                #[cfg(feature = "outbox-profiler")]
+                drop(sem_guard);
 
                 let ctx = ProcessContext {
                     db,
                     backend,
                     dialect,
                     partition_id: self.partition_id,
+                    #[cfg(feature = "outbox-profiler")]
+                    profiler: self.profiler.clone(),
                 };
 
                 // Use effective batch size from partition mode
@@ -179,9 +200,24 @@ impl<S: ProcessingStrategy> PartitionProcessor<S> {
                 effective_config.msg_batch_size = effective_size;
 
                 let child_cancel = cancel.child_token();
-                self.strategy
+
+                #[cfg(feature = "outbox-profiler")]
+                let mut proc_guard = self
+                    .profiler
+                    .as_ref()
+                    .map(|p| p.measure(super::profiler::Op::ProcessorReadMessages));
+
+                let result = self
+                    .strategy
                     .process(&ctx, &effective_config, child_cancel)
-                    .await?
+                    .await?;
+
+                #[cfg(feature = "outbox-profiler")]
+                if let (Some(g), Some(pr)) = (proc_guard.as_mut(), result.as_ref()) {
+                    g.set_rows(u64::from(pr.count));
+                }
+
+                result
             }; // permit dropped here
 
             if let Some(pr) = result {
@@ -204,87 +240,8 @@ impl<S: ProcessingStrategy> PartitionProcessor<S> {
                 }
             } else {
                 has_more = false;
-                // Reaper: clean up processed outgoing + body rows when idle
-                self.reap(db, backend, &dialect).await?;
             }
         }
-        Ok(())
-    }
-
-    /// Reaper: bulk-delete processed outgoing rows and their body rows.
-    async fn reap(
-        &self,
-        db: &Db,
-        backend: DbBackend,
-        dialect: &Dialect,
-    ) -> Result<(), OutboxError> {
-        let conn = db.sea_internal();
-        let row = conn
-            .query_one(Statement::from_sql_and_values(
-                backend,
-                dialect.read_processor(),
-                [self.partition_id.into()],
-            ))
-            .await?;
-        drop(conn);
-
-        let Some(row) = row else {
-            return Ok(());
-        };
-        let processed_seq: i64 = row.try_get_by_index(0).map_err(|e| {
-            OutboxError::Database(sea_orm::DbErr::Custom(format!("processed_seq column: {e}")))
-        })?;
-        if processed_seq == 0 {
-            return Ok(());
-        }
-
-        let sea_conn = db.sea_internal();
-        let txn = sea_conn.begin().await?;
-
-        match dialect.reaper_cleanup() {
-            ReaperSql::Cte(sql) => {
-                txn.execute(Statement::from_sql_and_values(
-                    backend,
-                    sql,
-                    [self.partition_id.into(), processed_seq.into()],
-                ))
-                .await?;
-            }
-            ReaperSql::TwoStep {
-                select_body_ids,
-                delete_outgoing,
-            } => {
-                let rows = txn
-                    .query_all(Statement::from_sql_and_values(
-                        backend,
-                        select_body_ids,
-                        [self.partition_id.into(), processed_seq.into()],
-                    ))
-                    .await?;
-
-                let body_ids: Vec<i64> = rows
-                    .iter()
-                    .filter_map(|r| r.try_get_by_index::<i64>(0).ok())
-                    .collect();
-
-                txn.execute(Statement::from_sql_and_values(
-                    backend,
-                    delete_outgoing,
-                    [self.partition_id.into(), processed_seq.into()],
-                ))
-                .await?;
-
-                // Batch body deletes — chunk to avoid exceeding DB parameter limits
-                for chunk in body_ids.chunks(REAPER_CHUNK_SIZE) {
-                    let delete_sql = dialect.build_delete_body_batch(chunk.len());
-                    let values: Vec<sea_orm::Value> = chunk.iter().map(|&id| id.into()).collect();
-                    txn.execute(Statement::from_sql_and_values(backend, &delete_sql, values))
-                        .await?;
-                }
-            }
-        }
-
-        txn.commit().await?;
         Ok(())
     }
 
@@ -360,6 +317,8 @@ mod tests {
             semaphore: Arc::new(Semaphore::new(1)),
             backoff_until: None,
             partition_mode: PartitionMode::Normal,
+            #[cfg(feature = "outbox-profiler")]
+            profiler: None,
         }
     }
 

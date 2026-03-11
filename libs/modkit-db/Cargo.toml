@@ -49,6 +49,10 @@ integration = []
 # Transactional outbox pipeline (preview — API may change)
 preview-outbox = ["dep:tokio-util"]
 
+# Outbox query profiler — instruments all SQL operations and emits periodic
+# tracing reports. Zero-cost when disabled.
+outbox-profiler = ["preview-outbox"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -93,7 +97,13 @@ required-features = ["sqlite", "preview-outbox"]
 name = "outbox_batch_multi_queue"
 required-features = ["sqlite", "preview-outbox"]
 
+[[bench]]
+name = "outbox_throughput"
+harness = false
+required-features = ["preview-outbox"]
+
 [dev-dependencies]
+criterion = { workspace = true, features = ["html_reports"] }
 tempfile = { workspace = true }
 serde-saphyr = { workspace = true }
 testcontainers = { workspace = true }
@@ -102,3 +112,5 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 temp-env = { workspace = true }
 trybuild = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }

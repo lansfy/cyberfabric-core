@@ -29,15 +29,15 @@ impl From<DbBackend> for Dialect {
     }
 }
 
-/// SQL for the Reaper's bulk cleanup operation.
-pub enum ReaperSql {
-    /// Postgres: single CTE statement that deletes outgoing and body rows atomically.
-    Cte(&'static str),
-    /// SQLite/MySQL: two-step — select `body_ids`, then delete outgoing, then delete bodies.
-    TwoStep {
-        select_body_ids: &'static str,
-        delete_outgoing: &'static str,
-    },
+/// SQL for the vacuum's bounded-chunk cleanup operation.
+///
+/// Strategy: SELECT a bounded chunk of (id, `body_id`) from outgoing, then
+/// DELETE those outgoing rows by ID, then DELETE body rows by ID.
+/// The caller loops while `deleted == batch_size` (more work likely).
+pub struct VacuumSql {
+    /// SELECT id, `body_id` with LIMIT for bounded chunk deletion.
+    /// Parameters: `partition_id`, `processed_seq`, limit.
+    pub select_outgoing_chunk: &'static str,
 }
 
 /// SQL for the sequencer's claim-incoming operation.
@@ -134,7 +134,7 @@ impl Dialect {
 
     /// Returns the `MySQL` query to retrieve the last auto-generated ID.
     fn last_insert_id() -> &'static str {
-        "SELECT LAST_INSERT_ID() AS id"
+        "SELECT CAST(LAST_INSERT_ID() AS SIGNED) AS id"
     }
 }
 
@@ -169,14 +169,6 @@ impl Dialect {
     pub fn build_read_body_batch(self, count: usize) -> String {
         let mut sql =
             String::from("SELECT id, payload, payload_type FROM modkit_outbox_body WHERE id IN (");
-        self.append_in_placeholders(&mut sql, count);
-        sql.push(')');
-        sql
-    }
-
-    /// Build `DELETE FROM modkit_outbox_body WHERE id IN (...)`.
-    pub fn build_delete_body_batch(self, count: usize) -> String {
-        let mut sql = String::from("DELETE FROM modkit_outbox_body WHERE id IN (");
         self.append_in_placeholders(&mut sql, count);
         sql.push(')');
         sql
@@ -757,41 +749,40 @@ impl Dialect {
         }
     }
 
-    /// Reaper: delete processed outgoing rows and their body rows atomically.
-    pub fn reaper_cleanup(self) -> ReaperSql {
+    /// Vacuum: bounded-chunk cleanup.
+    ///
+    /// Returns SQL to SELECT a bounded chunk of (id, `body_id`) from outgoing.
+    /// The caller deletes those rows by ID, then loops while
+    /// `deleted == batch_size`.
+    pub fn vacuum_cleanup(self) -> VacuumSql {
         match self {
-            Self::Postgres => ReaperSql::Cte(
-                "WITH deleted_outgoing AS ( \
-                    DELETE FROM modkit_outbox_outgoing \
-                    WHERE partition_id = $1 AND seq <= $2 \
-                    RETURNING body_id \
-                 ) \
-                 DELETE FROM modkit_outbox_body \
-                 WHERE id IN (SELECT body_id FROM deleted_outgoing)",
-            ),
-            Self::Sqlite | Self::MySql => ReaperSql::TwoStep {
-                select_body_ids: match self {
-                    Self::Sqlite => {
-                        "SELECT body_id FROM modkit_outbox_outgoing \
-                         WHERE partition_id = $1 AND seq <= $2"
-                    }
-                    _ => {
-                        "SELECT body_id FROM modkit_outbox_outgoing \
-                         WHERE partition_id = ? AND seq <= ?"
-                    }
-                },
-                delete_outgoing: match self {
-                    Self::Sqlite => {
-                        "DELETE FROM modkit_outbox_outgoing \
-                         WHERE partition_id = $1 AND seq <= $2"
-                    }
-                    _ => {
-                        "DELETE FROM modkit_outbox_outgoing \
-                         WHERE partition_id = ? AND seq <= ?"
-                    }
-                },
+            Self::Postgres | Self::Sqlite => VacuumSql {
+                select_outgoing_chunk: "SELECT id, body_id FROM modkit_outbox_outgoing \
+                                        WHERE partition_id = $1 AND seq <= $2 \
+                                        ORDER BY seq LIMIT $3",
+            },
+            Self::MySql => VacuumSql {
+                select_outgoing_chunk: "SELECT id, body_id FROM modkit_outbox_outgoing \
+                                        WHERE partition_id = ? AND seq <= ? \
+                                        ORDER BY seq LIMIT ?",
             },
         }
+    }
+
+    /// Build `DELETE FROM modkit_outbox_outgoing WHERE id IN ($1, $2, ...)`.
+    pub fn build_delete_outgoing_batch(self, count: usize) -> String {
+        let mut sql = String::from("DELETE FROM modkit_outbox_outgoing WHERE id IN (");
+        self.append_in_placeholders(&mut sql, count);
+        sql.push(')');
+        sql
+    }
+
+    /// Build `DELETE FROM modkit_outbox_body WHERE id IN (...)`.
+    pub fn build_delete_body_batch(self, count: usize) -> String {
+        let mut sql = String::from("DELETE FROM modkit_outbox_body WHERE id IN (");
+        self.append_in_placeholders(&mut sql, count);
+        sql.push(')');
+        sql
     }
 
     pub fn read_processor(self) -> &'static str {
@@ -803,6 +794,97 @@ impl Dialect {
             Self::MySql => {
                 "SELECT processed_seq, attempts \
                  FROM modkit_outbox_processor WHERE partition_id = ?"
+            }
+        }
+    }
+}
+
+// -- Vacuum counter queries --
+
+impl Dialect {
+    /// Bump the vacuum counter for a partition (called by processor on ack).
+    pub fn bump_vacuum_counter(self) -> &'static str {
+        match self {
+            Self::Postgres | Self::Sqlite => {
+                "UPDATE modkit_outbox_vacuum_counter \
+                 SET counter = counter + 1 WHERE partition_id = $1"
+            }
+            Self::MySql => {
+                "UPDATE modkit_outbox_vacuum_counter \
+                 SET counter = counter + 1 WHERE partition_id = ?"
+            }
+        }
+    }
+
+    /// Fetch dirty partitions paginated by `partition_id` cursor.
+    /// Returns `(partition_id, counter)` for partitions with `counter > 0`.
+    pub fn fetch_dirty_partitions(self) -> &'static str {
+        match self {
+            Self::Postgres | Self::Sqlite => {
+                "SELECT partition_id, counter \
+                 FROM modkit_outbox_vacuum_counter \
+                 WHERE counter > 0 AND partition_id > $1 \
+                 ORDER BY partition_id LIMIT $2"
+            }
+            Self::MySql => {
+                "SELECT partition_id, counter \
+                 FROM modkit_outbox_vacuum_counter \
+                 WHERE counter > 0 AND partition_id > ? \
+                 ORDER BY partition_id LIMIT ?"
+            }
+        }
+    }
+
+    /// Decrement vacuum counter by snapshot value, floored at 0.
+    pub fn decrement_vacuum_counter(self) -> &'static str {
+        match self {
+            Self::Postgres => {
+                "UPDATE modkit_outbox_vacuum_counter \
+                 SET counter = GREATEST(counter - $1, 0) \
+                 WHERE partition_id = $2"
+            }
+            Self::Sqlite => {
+                "UPDATE modkit_outbox_vacuum_counter \
+                 SET counter = MAX(counter - $1, 0) \
+                 WHERE partition_id = $2"
+            }
+            Self::MySql => {
+                "UPDATE modkit_outbox_vacuum_counter \
+                 SET counter = GREATEST(counter - ?, 0) \
+                 WHERE partition_id = ?"
+            }
+        }
+    }
+
+    /// Reset vacuum counter to 0. Used by integration tests for state cleanup.
+    #[cfg(test)]
+    pub fn reset_vacuum_counter(self) -> &'static str {
+        match self {
+            Self::Postgres | Self::Sqlite => {
+                "UPDATE modkit_outbox_vacuum_counter \
+                 SET counter = 0 WHERE partition_id = $1"
+            }
+            Self::MySql => {
+                "UPDATE modkit_outbox_vacuum_counter \
+                 SET counter = 0 WHERE partition_id = ?"
+            }
+        }
+    }
+
+    /// Insert a vacuum counter row (idempotent, for `register_queue`).
+    pub fn insert_vacuum_counter_row(self) -> &'static str {
+        match self {
+            Self::Postgres => {
+                "INSERT INTO modkit_outbox_vacuum_counter (partition_id) \
+                 VALUES ($1) ON CONFLICT (partition_id) DO NOTHING"
+            }
+            Self::Sqlite => {
+                "INSERT OR IGNORE INTO modkit_outbox_vacuum_counter (partition_id) \
+                 VALUES ($1)"
+            }
+            Self::MySql => {
+                "INSERT IGNORE INTO modkit_outbox_vacuum_counter (partition_id) \
+                 VALUES (?)"
             }
         }
     }
@@ -1027,5 +1109,83 @@ mod tests {
         let mysql = Dialect::MySql.insert_dead_letter();
         assert!(mysql.contains('?'));
         assert!(!mysql.contains('$'));
+    }
+
+    // -- Vacuum counter dialect tests --
+
+    #[test]
+    fn bump_vacuum_counter_placeholders() {
+        let pg = Dialect::Postgres.bump_vacuum_counter();
+        assert!(pg.contains("$1"));
+        assert!(pg.contains("modkit_outbox_vacuum_counter"));
+        assert!(pg.contains("counter + 1"));
+
+        let mysql = Dialect::MySql.bump_vacuum_counter();
+        assert!(mysql.contains('?'));
+        assert!(!mysql.contains('$'));
+    }
+
+    #[test]
+    fn fetch_dirty_partitions_placeholders() {
+        let pg = Dialect::Postgres.fetch_dirty_partitions();
+        assert!(pg.contains("$1"));
+        assert!(pg.contains("$2"));
+        assert!(pg.contains("counter > 0"));
+        assert!(pg.contains("ORDER BY partition_id"));
+
+        let mysql = Dialect::MySql.fetch_dirty_partitions();
+        assert!(mysql.contains('?'));
+        assert!(!mysql.contains('$'));
+    }
+
+    #[test]
+    fn decrement_vacuum_counter_placeholders() {
+        let pg = Dialect::Postgres.decrement_vacuum_counter();
+        assert!(pg.contains("GREATEST"));
+        assert!(pg.contains("$1"));
+        assert!(pg.contains("$2"));
+
+        let sqlite = Dialect::Sqlite.decrement_vacuum_counter();
+        assert!(sqlite.contains("MAX"));
+        assert!(sqlite.contains("$1"));
+
+        let mysql = Dialect::MySql.decrement_vacuum_counter();
+        assert!(mysql.contains("GREATEST"));
+        assert!(mysql.contains('?'));
+    }
+
+    #[test]
+    fn reset_vacuum_counter_placeholders() {
+        let pg = Dialect::Postgres.reset_vacuum_counter();
+        assert!(pg.contains("counter = 0"));
+        assert!(pg.contains("$1"));
+
+        let mysql = Dialect::MySql.reset_vacuum_counter();
+        assert!(mysql.contains('?'));
+    }
+
+    #[test]
+    fn insert_vacuum_counter_row_placeholders() {
+        let pg = Dialect::Postgres.insert_vacuum_counter_row();
+        assert!(pg.contains("$1"));
+        assert!(pg.contains("ON CONFLICT"));
+
+        let sqlite = Dialect::Sqlite.insert_vacuum_counter_row();
+        assert!(sqlite.contains("INSERT OR IGNORE"));
+
+        let mysql = Dialect::MySql.insert_vacuum_counter_row();
+        assert!(mysql.contains("INSERT IGNORE"));
+        assert!(mysql.contains('?'));
+    }
+
+    #[test]
+    fn vacuum_cleanup_placeholders() {
+        let pg = Dialect::Postgres.vacuum_cleanup();
+        assert!(pg.select_outgoing_chunk.contains("$1"));
+        assert!(pg.select_outgoing_chunk.contains("$2"));
+        assert!(pg.select_outgoing_chunk.contains("$3"));
+
+        let mysql = Dialect::MySql.vacuum_cleanup();
+        assert!(mysql.select_outgoing_chunk.contains('?'));
     }
 }

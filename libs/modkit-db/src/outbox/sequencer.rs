@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement, TransactionTrait};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -24,6 +24,7 @@ pub struct Sequencer {
     config: SequencerConfig,
     outbox: Arc<Outbox>,
     notify: Arc<Notify>,
+    maintenance_sem: Arc<Semaphore>,
     /// Per-partition notify map for direct signaling.
     partition_notify: std::sync::RwLock<Option<PartitionNotifyMap>>,
 }
@@ -44,11 +45,17 @@ struct ClaimedIncoming {
 impl Sequencer {
     /// Create a new sequencer.
     #[must_use]
-    pub fn new(config: SequencerConfig, outbox: Arc<Outbox>, notify: Arc<Notify>) -> Self {
+    pub fn new(
+        config: SequencerConfig,
+        outbox: Arc<Outbox>,
+        notify: Arc<Notify>,
+        maintenance_sem: Arc<Semaphore>,
+    ) -> Self {
         Self {
             config,
             outbox,
             notify,
+            maintenance_sem,
             partition_notify: std::sync::RwLock::new(None),
         }
     }
@@ -99,6 +106,19 @@ impl Sequencer {
     ///
     /// Returns an error if a database operation fails.
     pub async fn sequence_batch(&self, db: &Db) -> Result<SequenceBatchResult, OutboxError> {
+        // Acquire maintenance semaphore permit before DB operations.
+        let Ok(_maint_permit) = self.maintenance_sem.acquire().await else {
+            return Ok(SequenceBatchResult {
+                any_partition_saturated: false,
+            });
+        };
+
+        #[cfg(feature = "outbox-profiler")]
+        let mut profiler_guard = self
+            .outbox
+            .profiler()
+            .map(|p| p.measure(super::profiler::Op::SequencerClaimIncoming));
+
         let partition_ids = self.outbox.all_partition_ids();
         if partition_ids.is_empty() {
             return Ok(SequenceBatchResult {
@@ -171,6 +191,11 @@ impl Sequencer {
         }
 
         txn.commit().await?;
+
+        #[cfg(feature = "outbox-profiler")]
+        if let Some(g) = profiler_guard.as_mut() {
+            g.set_rows(u64::from(total));
+        }
 
         // Notify per-partition processors after commit
         if let Some(map) = self

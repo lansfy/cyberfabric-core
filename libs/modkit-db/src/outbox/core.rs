@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement};
+use sea_orm::{ConnectionTrait, DbBackend, FromQueryResult, Statement, TransactionTrait};
 use tokio::sync::{Notify, RwLock};
 
 use super::dialect::Dialect;
@@ -27,6 +27,8 @@ pub struct Outbox {
     /// Rebuilt on each `register_queue` call.
     all_partition_ids: RwLock<Vec<i64>>,
     sequencer_notify: Arc<Notify>,
+    #[cfg(feature = "outbox-profiler")]
+    profiler: Option<Arc<super::profiler::QueryProfiler>>,
 }
 
 #[derive(Debug, FromQueryResult)]
@@ -52,7 +54,27 @@ impl Outbox {
             partition_to_queue: DashMap::new(),
             all_partition_ids: RwLock::new(Vec::new()),
             sequencer_notify,
+            #[cfg(feature = "outbox-profiler")]
+            profiler: None,
         }
+    }
+
+    /// Attach a query profiler. Called by the builder when the feature is enabled.
+    #[cfg(feature = "outbox-profiler")]
+    pub(crate) fn set_profiler(&mut self, profiler: Arc<super::profiler::QueryProfiler>) {
+        self.profiler = Some(profiler);
+    }
+
+    /// Returns a reference to the profiler if attached.
+    #[cfg(feature = "outbox-profiler")]
+    pub(crate) fn profiler(&self) -> Option<&super::profiler::QueryProfiler> {
+        self.profiler.as_deref()
+    }
+
+    /// Returns an `Arc` clone of the profiler if attached.
+    #[cfg(feature = "outbox-profiler")]
+    pub(crate) fn profiler_arc(&self) -> Option<Arc<super::profiler::QueryProfiler>> {
+        self.profiler.clone()
     }
 
     /// Register a queue with `num_partitions` partitions `[0, num_partitions)`.
@@ -78,10 +100,18 @@ impl Outbox {
         queue: &str,
         num_partitions: u16,
     ) -> Result<(), OutboxError> {
-        let ids = self
-            .ensure_partition_rows(db, queue, num_partitions)
-            .await?;
-        self.ensure_processor_rows(db, &ids).await?;
+        let conn = db.sea_internal();
+        let txn = conn.begin().await?;
+        let backend = txn.get_database_backend();
+        let dialect = Dialect::from(backend);
+
+        let ids =
+            Self::ensure_partition_rows(&txn, backend, &dialect, queue, num_partitions).await?;
+        Self::ensure_processor_rows(&txn, backend, &dialect, &ids).await?;
+        Self::ensure_vacuum_counter_rows(&txn, backend, &dialect, &ids).await?;
+
+        txn.commit().await?;
+
         self.populate_caches(queue, &ids).await;
         Ok(())
     }
@@ -90,22 +120,19 @@ impl Outbox {
     ///
     /// Returns the partition IDs (PKs) for the queue — whether they were
     /// already present or freshly inserted.
-    async fn ensure_partition_rows(
-        &self,
-        db: &Db,
+    async fn ensure_partition_rows<C: ConnectionTrait>(
+        conn: &C,
+        backend: DbBackend,
+        dialect: &Dialect,
         queue: &str,
         num_partitions: u16,
     ) -> Result<Vec<i64>, OutboxError> {
-        let conn = db.sea_internal();
-        let backend = conn.get_database_backend();
-        let dialect = Dialect::from(backend);
-
         let existing = PartitionRow::find_by_statement(Statement::from_sql_and_values(
             backend,
             dialect.register_queue_select(),
             [queue.into()],
         ))
-        .all(&conn)
+        .all(conn)
         .await?;
 
         if !existing.is_empty() {
@@ -136,7 +163,7 @@ impl Outbox {
             dialect.register_queue_select(),
             [queue.into()],
         ))
-        .all(&conn)
+        .all(conn)
         .await?;
 
         Ok(rows.into_iter().map(|r| r.id).collect())
@@ -144,15 +171,35 @@ impl Outbox {
 
     /// Insert a processor row for each partition ID (idempotent via
     /// `ON CONFLICT DO NOTHING`).
-    async fn ensure_processor_rows(&self, db: &Db, ids: &[i64]) -> Result<(), OutboxError> {
-        let conn = db.sea_internal();
-        let backend = conn.get_database_backend();
-        let dialect = Dialect::from(backend);
-
+    async fn ensure_processor_rows<C: ConnectionTrait>(
+        conn: &C,
+        backend: DbBackend,
+        dialect: &Dialect,
+        ids: &[i64],
+    ) -> Result<(), OutboxError> {
         for &id in ids {
             conn.execute(Statement::from_sql_and_values(
                 backend,
                 dialect.insert_processor_row(),
+                [id.into()],
+            ))
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Insert a vacuum counter row for each partition ID (idempotent via
+    /// `ON CONFLICT DO NOTHING`).
+    async fn ensure_vacuum_counter_rows<C: ConnectionTrait>(
+        conn: &C,
+        backend: DbBackend,
+        dialect: &Dialect,
+        ids: &[i64],
+    ) -> Result<(), OutboxError> {
+        for &id in ids {
+            conn.execute(Statement::from_sql_and_values(
+                backend,
+                dialect.insert_vacuum_counter_row(),
                 [id.into()],
             ))
             .await?;
@@ -214,9 +261,19 @@ impl Outbox {
         Self::validate_payload(&payload)?;
         let partition_id = self.resolve_partition(queue, partition)?;
 
+        #[cfg(feature = "outbox-profiler")]
+        let mut body_guard = self
+            .profiler()
+            .map(|p| p.measure(super::profiler::Op::EnqueueInsertBody));
+
         let runner = db.as_seaorm();
         let incoming_id =
             Self::insert_body_and_incoming(&runner, partition_id, payload, payload_type).await?;
+
+        #[cfg(feature = "outbox-profiler")]
+        if let Some(g) = body_guard.as_mut() {
+            g.set_rows(1);
+        }
 
         Ok(OutboxMessageId(incoming_id))
     }
@@ -242,8 +299,19 @@ impl Outbox {
             resolved.push(partition_id);
         }
 
+        #[cfg(feature = "outbox-profiler")]
+        let mut body_guard = self
+            .profiler()
+            .map(|p| p.measure(super::profiler::Op::EnqueueInsertBody));
+
         let runner = db.as_seaorm();
         let ids = Self::insert_batch(&runner, &resolved, items).await?;
+
+        #[cfg(feature = "outbox-profiler")]
+        if let Some(g) = body_guard.as_mut() {
+            #[allow(clippy::cast_possible_truncation)]
+            g.set_rows(ids.len() as u64);
+        }
 
         Ok(ids)
     }
