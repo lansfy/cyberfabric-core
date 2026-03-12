@@ -19,7 +19,7 @@ changelog_path = "CHANGELOG.md"
 semver_check = true
 
 # To prevent crates.io throttling
-publish_timeout = "7m"
+publish_timeout = "10m"
 
 [changelog]
 body = """
