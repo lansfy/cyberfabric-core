@@ -1060,6 +1060,8 @@ dependencies = [
  "inventory",
  "matchit 0.9.1",
  "nanoid",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "parking_lot",
  "rust-embed",
  "serde",

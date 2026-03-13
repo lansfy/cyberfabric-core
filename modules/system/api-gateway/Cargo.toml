@@ -44,6 +44,7 @@ tower-http = { workspace = true }
 matchit = { workspace = true }
 governor = { workspace = true }
 
+opentelemetry = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 
@@ -53,6 +54,8 @@ rust-embed = { workspace = true }
 
 [dev-dependencies]
 futures-core = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 uuid = { workspace = true }
 
 [features]
