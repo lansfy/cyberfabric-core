@@ -296,6 +296,7 @@ Hard caps: token budgets (`max_input_tokens`, `max_output_tokens`) MUST remain c
 | Message | A single turn in a chat (role: user/assistant/system). Stores content, token estimate, compression status. Always includes a required `attachments` field — an always-present array of `AttachmentSummary` objects (empty array when none), derived from the `message_attachments` join table (not stored on the `messages` row). Each `AttachmentSummary` contains `attachment_id`, `kind`, `filename`, `status`, and `img_thumbnail` (for images). Always includes a required `request_id` (UUID) — within a normal turn, user and assistant messages share the same value (turn correlation key); system/background messages use an independently server-generated UUID v4. Assistant messages record the **effective_model** (the model actually used after quota/policy evaluation). |
 | Attachment | File uploaded to a chat (document or image). Identified by internal `attachment_id` (UUID). Stores `provider_file_id` internally (never exposed via API). Documents are linked to the chat's vector store; images are not. Has processing status and `attachment_kind (document|image)`. For image attachments, an optional `img_thumbnail` (server-generated preview, `image/webp`, fit inside configured WxH preserving aspect ratio; max decoded size 128 KiB by default, configurable via `thumbnail_max_bytes`) is produced on upload and stored in Mini Chat database only (never uploaded to provider); null for documents and when thumbnail generation is unavailable or failed. `doc_summary` is always null for images. |
 | ThreadSummary | Compressed representation of older messages in a chat. Replaces old history in the context window.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ThreadSummaryTask | Durable background task record for automatic thread summary generation. Stores the frozen summary range and lifecycle state (`pending`, `claimed`, `completed`, `stale`, `failed`). Exists only for system/background execution, references one chat, and is independent from user-visible `chat_turns`. |
 | ChatVectorStore | Mapping from `(tenant_id, chat_id)` to provider `vector_store_id` (OpenAI or Azure OpenAI Vector Stores API). One vector store per chat (created on first document upload). Physical and logical isolation are both per chat (see File Search Retrieval Scope).                                                                                                                                                                                                                                                                                                                 |
 | AuditEvent | Structured event emitted to platform `audit_service`: prompt, response, user/tenant, timestamps, policy decisions, usage. Not stored locally.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | QuotaUsage | Per-user usage counters for rate limiting and budget enforcement. Tracks daily and monthly periods per tier in credits. Credits are computed from provider-reported token usage using the model credit multipliers in the policy snapshot. Premium models have stricter limits; standard-tier models have separate, higher limits.                                                                                                                                                                                                                                                  |
@@ -306,6 +307,8 @@ Hard caps: token budgets (`max_input_tokens`, `max_output_tokens`) MUST remain c
 - Chat -> Message: 1..\*
 - Chat -> Attachment: 0..\*
 - Chat -> ThreadSummary: 0..1
+- Chat -> ThreadSummaryTask: 0..*
+- ThreadSummaryTask -> Chat: *..1 (references exactly one chat; independent from `chat_turns`)
 - Message -> Attachment: 0..\* (M:N via `message_attachments` join table; user messages reference attachments from `attachment_ids`)
 - Attachment -> ChatVectorStore: belongs to (via chat_id; documents only — images are not indexed)
 - Message -> AuditEvent: 1..1 (each turn emits an audit event to platform `audit_service`)
@@ -345,11 +348,11 @@ graph TB
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-component-chat-service`
 
-- **mini-chat module** — A ModKit module (`#[modkit::module(name = "mini-chat", deps = ["authz-resolver"], capabilities = [db, rest])]`). The domain service layer is the core orchestrator and Policy Enforcement Point (PEP): receives user messages, evaluates authorization via AuthZ Resolver (PolicyEnforcer → AccessScope), builds context plan, invokes LLM via `llm_provider`, relays streaming tokens, persists messages and usage via infra/storage repositories, triggers thread summary updates.
+- **mini-chat module** — A ModKit module (`#[modkit::module(name = "mini-chat", deps = ["authz-resolver"], capabilities = [db, rest])]`). The domain service layer is the core orchestrator and Policy Enforcement Point (PEP): receives user messages, evaluates authorization via AuthZ Resolver (PolicyEnforcer → AccessScope), builds context plan, invokes LLM via `llm_provider`, relays streaming tokens, persists messages and usage via infra/storage repositories, evaluates the thread summary trigger after eligible turns are durably persisted, enqueues durable `thread_summary_tasks`, and MAY send a best-effort local wake-up to the current background worker leader.
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-component-chat-store`
 
-- **infra/storage** — SeaORM persistence layer with `#[derive(Scopable)]` entities, ORM repositories, and migrations. All queries are scoped via `AccessScope` (compiled from PolicyEnforcer decisions). Source of truth for chats, messages, attachments, thread summaries, chat vector store mappings, and quota usage.
+- **infra/storage** — SeaORM persistence layer with `#[derive(Scopable)]` entities, ORM repositories, and migrations. All queries are scoped via `AccessScope` (compiled from PolicyEnforcer decisions). Source of truth for chats, messages, attachments, thread summaries, thread summary tasks, chat vector store mappings, and quota usage.
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-component-llm-provider`
 
@@ -1460,30 +1463,173 @@ sequenceDiagram
     participant OG as outbound_gateway
     participant OAI as OpenAI / Azure OpenAI
 
-    CS->>CS: Check summary trigger (msg count > 20 OR tokens > budget OR every 15 user turns)
-    CS->>CS: Enqueue thread summary task (requester_type=system)
-    Note over CS: Background worker executes summary task asynchronously
-    CS->>DB: Load current thread_summary + old messages batch (10-20 msgs)
+    CS->>CS: Check summary trigger (assembled request token estimate exceeds compression threshold)
+    CS->>DB: Load current summary frontier (base_frontier)
+    CS->>DB: Determine frozen_target_frontier relative to base_frontier using message order (created_at, id)
+    CS->>DB: Insert durable thread_summary_tasks row or detect duplicate frozen range
+    opt Row inserted and this process is current leader
+        CS->>CS: Send best-effort local wake-up (`tokio::mpsc`)
+    end
+    Note over CS: Background summary worker leader claims and executes tasks asynchronously
+    CS->>DB: Claim pending thread_summary_tasks row durably
+    CS->>DB: Load task frontier range and fetch non-deleted, non-compressed messages in that range ordered by created_at ASC, id ASC
     CS->>OG: POST /outbound/llm/responses (update summary prompt)
     OG->>OAI: Responses API
-    OAI-->>OG: Updated summary
-    OG-->>CS: Updated summary
-    CS->>DB: Save new thread_summary
-    CS->>DB: Mark summarized messages as compressed
+    alt Provider error / timeout
+        OAI-->>OG: Error / timeout
+        OG-->>CS: Error / timeout
+        CS->>DB: Mark task failed
+    else Updated summary returned
+        OAI-->>OG: Updated summary
+        OG-->>CS: Updated summary
+        CS->>DB: Atomic commit (CAS on base_frontier): save new thread_summary, advance frontier, mark exact range compressed
+        alt CAS succeeds
+            DB-->>CS: Commit OK
+            CS->>DB: Mark task completed
+        else Frontier already advanced
+            DB-->>CS: 0 rows updated
+            CS->>DB: Mark task stale
+            CS->>CS: Finish without another LLM call
+        end
+    end
 ```
 
-**Description**: Thread summary is updated asynchronously after a chat turn when trigger conditions are met. Summary generation is a background task and MUST be attributed as `requester_type=system` so that its usage is not charged to an arbitrary end user.
+**Description**: Thread summary is updated asynchronously after a chat turn when trigger conditions are met. `thread_summaries` stores only committed summary state. Durable pending, claimed, and terminal background work is stored in `thread_summary_tasks`. Summary generation is a background/system task and MUST run as `requester_type=system`. It MUST NOT create a `chat_turns` record, MUST NOT debit per-user quota, and MUST still emit usage for tenant/system attribution.
+
+##### Trigger timing
+
+- The system MUST evaluate the thread summary trigger only after the current chat turn has been durably persisted.
+- The trigger evaluation MAY reuse the assembled request token estimate computed for the just-completed turn.
+- If the trigger condition is met, the system MUST enqueue a durable `thread_summary_tasks` row after turn completion.
+- Thread summary generation is asynchronous and MUST NOT block or modify the user-visible response path of the current turn.
+- Any summary produced by that task is eligible only for subsequent turns and MUST NOT alter the `ContextPlan` of the in-flight turn that caused the trigger.
 
 **P1 — Simple summarization (no quality gate):**
 
-- The background worker calls the LLM with a summarization prompt over the old messages batch.
-- If the LLM call succeeds: save the new `thread_summary` and mark the batch as `is_compressed = true`.
-- If the LLM call fails (provider error, timeout): keep the previous summary unchanged; do NOT mark messages as compressed; log the failure and increment `mini_chat_summary_fallback_total`.
+**Summary trigger based on token budget**
+
+Thread summary generation MUST be driven by the estimated token size of the assembled request context rather than by message count.
+
+Before each LLM call, the system already constructs a `ContextPlan` and computes an estimated input token size for the final request payload (system prompt, current thread summary, recent messages, retrieval/document context, tools, and the new user message).
+
+The thread summary trigger MUST evaluate this assembled request estimate.
+
+A summary SHOULD be triggered when the estimated assembled request input reaches a configurable compression threshold.
+
+The default compression threshold SHOULD be **80% of the effective input token budget**.
+
+The effective input token budget is defined as:
+
+`token_budget = min(configured_max_input_tokens, model_context_window - reserved_output_tokens)`
+
+If the estimated assembled request tokens exceed the compression threshold, the system SHOULD enqueue a durable summary task after the causing turn completes.
+
+**Heuristic triggers**
+
+Implementations MAY use message-count or turn-count heuristics only as cheap signals indicating when token estimation should be recalculated.
+
+Such heuristics MUST NOT be used as the sole correctness criterion for summary generation.
+
+- When a durable `thread_summary_tasks` row is inserted and later claimed, the worker MUST bind the run to the frozen target frontier persisted in that row in the per-chat message order `(created_at ASC, id ASC)`.
+- The worker MUST load exactly the non-deleted, non-compressed messages whose order key is in `(base_frontier, frozen_target_frontier]`.
+- Messages appended after `frozen_target_frontier` MUST be excluded from the current run. They MUST NOT cancel, widen, or invalidate the in-flight run and are eligible only for a future summary cycle.
+- The worker MUST call the LLM exactly once for that frozen range.
+- If the LLM call succeeds, the worker MUST attempt one atomic commit that:
+  1. saves the new `thread_summary`,
+  2. advances the stored summary frontier to `frozen_target_frontier`, and
+  3. marks exactly that summarized range as `is_compressed = true`.
+- The commit MUST succeed only if the stored summary frontier still equals the worker's `base_frontier` (compare-and-set).
+- If the CAS precondition fails because another worker already advanced the frontier, the task is stale and MUST finish without a second LLM call for the same frozen range.
+- If the LLM call fails (provider error, timeout), the system MUST keep the previous summary unchanged, MUST NOT advance the frontier, and MUST NOT mark messages as compressed. P1 does not automatically retry the same frozen range.
 - No length or entropy validation is performed in P1.
 
 Observability (P1):
 
 - Increment `mini_chat_summary_fallback_total` when the worker falls back due to provider failure.
+
+##### Execution model
+
+Automatic thread summary generation is executed by a single active background worker leader.
+
+The worker MUST depend on a `LeaderElector` abstraction rather than directly on deployment-specific primitives.
+
+**LeaderElector responsibilities**:
+
+- Determine whether the current process is the active background worker leader.
+- Provide a mechanism to periodically re-check leadership.
+- Allow the worker to stop claiming or processing new tasks if leadership is lost.
+
+**Implementations**:
+
+- **`k8s::LeaderElector`** — Used in Kubernetes deployments. Leadership MUST be determined using Kubernetes Lease or an equivalent cluster leader election mechanism. At most one pod may hold leadership at a time. Only the current leader MAY claim and execute `thread_summary_tasks`.
+- **`NoopLeaderElector`** — Used in environments without Kubernetes (for example local development, single-instance deployments, or deployments without a cluster control plane). `NoopLeaderElector` MUST always report that the current process is leader. All background summary work is executed in the local process. This mode assumes that only one Mini Chat process runs or that duplicate background workers are otherwise prevented by deployment policy. `NoopLeaderElector` does not provide distributed coordination. If multiple instances run without a real leader election mechanism, duplicate task execution MAY occur, but durable `thread_summary_tasks` deduplication and CAS frontier checks still prevent incorrect summary commits.
+
+The leader election mechanism affects **who executes tasks**, not **how tasks are stored or deduplicated**. Durable task state in Postgres (`thread_summary_tasks`) remains the authoritative source of truth regardless of leader election implementation.
+
+The implementation MAY use an in-process notification mechanism such as `tokio::mpsc` to wake the current leader after a task is enqueued. Such a channel is only a best-effort local wake-up optimization and MUST NOT be the source of truth for task existence, deduplication, claim, or recovery.
+
+The leader MUST also run a periodic reconciliation loop to discover pending or abandoned tasks after restart, lease failover, or lost in-process notifications.
+
+##### Claim and recovery semantics
+
+- A leader worker MUST durably claim a `pending` `thread_summary_tasks` row before executing it.
+- Claiming MUST record durable in-DB claimed state (`status = claimed`, `claimed_by`, `claimed_at`) before any LLM call is issued.
+- If a leader crashes after claiming but before completion, another leader MAY reclaim the task after a lease-safe abandonment timeout or equivalent abandonment check.
+- Reclaim MUST preserve the same frozen summary range and MUST NOT create a new automatic task for that range.
+- If the committed summary frontier has already advanced beyond the task's `base_frontier` when the task is processed or reclaimed, the task MUST transition to `stale` without issuing a new LLM call.
+- If the LLM call or execution fails before a successful CAS commit, the task MUST transition to `failed` and the frontier MUST NOT advance.
+- If the CAS commit succeeds, the task MUST transition to `completed`.
+
+##### Thread Summary Worker - Stable Range and No-Recompute Invariant
+
+**Definitions**:
+
+- **Summary frontier** — the inclusive per-chat frontier stored in `thread_summaries` as `(summarized_up_to_created_at, summarized_up_to_message_id)`. It identifies the last message already represented in `summary_text`. If no `thread_summaries` row exists for the chat, the frontier is empty.
+- **Durable summary task** — a `thread_summary_tasks` row representing automatic background summary work for one frozen summary range. `thread_summaries` stores committed state only; `thread_summary_tasks` stores pending, claimed, and terminal task state.
+- **Frozen target frontier** — the inclusive upper bound `(target_created_at, target_message_id)` captured at enqueue time and persisted in the `thread_summary_tasks` row. Recomputing the target frontier at worker execution time is not sufficient.
+- **Message order** — thread summary selection MUST use the strict total order `(created_at ASC, id ASC)`. `created_at` alone is insufficient because multiple messages may share the same timestamp. `id` is the UUID message identifier and is used only as a deterministic tie-breaker when `created_at` values are equal.
+
+**Range selection**:
+
+For a task with `base_frontier` and `frozen_target_frontier`, the worker MUST summarize exactly the set of messages in the same chat that satisfy all of the following:
+
+1. `deleted_at IS NULL`
+2. `is_compressed = false`
+3. `(created_at, id) > base_frontier`
+4. `(created_at, id) <= frozen_target_frontier`
+
+The worker MUST load these messages ordered by `(created_at ASC, id ASC)`.
+
+**Active task identity and deduplication**
+
+The durable `thread_summary_tasks` table MUST treat a summary task as uniquely identified by the tuple:
+
+`(chat_id, base_frontier_created_at, base_frontier_message_id, frozen_target_created_at, frozen_target_message_id)`.
+
+The implementation MUST enforce durable uniqueness of automatic tasks for that frozen summary range in Postgres.
+
+If a later summary trigger observes the same frozen summary range, the system MUST NOT create or start another automatic task for that range.
+
+This invariant exists to guarantee that duplicate LLM summarization calls for the same message range cannot occur due to concurrent workers, repeated triggers, restart recovery, or leader failover.
+
+**Task stability and concurrency**:
+
+- Messages created after `frozen_target_frontier` remain outside the current run and are eligible only for a future run after the frontier advances.
+- The commit MUST be atomic and MUST advance the summary frontier only if the stored frontier still equals `base_frontier`.
+- Only one worker can win that compare-and-set. Any losing or stale worker MUST treat its task as stale, MUST NOT write a new summary, and MUST NOT issue another LLM call for the same frozen range as part of stale handling.
+- If the compare-and-set commit fails, the worker MUST terminate the task without issuing any additional LLM call.
+
+**No-recompute invariant**:
+
+For P1 automatic background processing, a frozen summary range identified by
+`(chat_id, base_frontier, frozen_target_frontier)`
+MUST be selected for at most one automatic LLM summarization call.
+
+Concurrent workers, append-triggered rescheduling, restart recovery, or stale-task handling MUST NOT cause the same frozen range to be summarized again automatically.
+
+Arrival of new messages after `frozen_target_frontier` MUST NOT cause the existing frozen range to be widened, re-selected, or recomputed.
+
+Manual or operator-driven recovery procedures, if introduced in a future phase, are outside the scope of this rule.
 
 **P2+ — Summary quality gate (deferred):**
 
@@ -1491,7 +1637,7 @@ The following quality gate is deferred to P2+. It is preserved here for forward 
 
 - After generating a summary, the domain service MUST validate the candidate summary text.
 - If summary length < `X` OR entropy < `Y`, the domain service MUST attempt regeneration.
-- If regeneration fails quality checks or the provider call fails, the domain service MUST fall back by keeping the previous summary unchanged and MUST NOT mark the message batch as compressed.
+- If regeneration fails quality checks or the provider call fails, the domain service MUST fall back by keeping the previous summary unchanged and MUST NOT advance the frontier or mark the frozen message range as compressed.
 
 `X` and `Y` are configurable thresholds. Entropy is a deterministic proxy computed as normalized token entropy over whitespace-delimited tokens:
 
@@ -1627,7 +1773,9 @@ sequenceDiagram
 
 **Constraints**: NOT NULL on `chat_id`, `role`, `content`, `content_type`, `created_at`. FK `chat_id` -> `chats.id` ON DELETE CASCADE. UNIQUE on `(chat_id, request_id, role)` WHERE `request_id IS NOT NULL AND deleted_at IS NULL` (allows one user message and one assistant message per request_id; maintains idempotency).
 
-**Indexes**: `(chat_id, created_at) WHERE deleted_at IS NULL` for loading recent messages (partial index excluding soft-deleted rows)
+**Indexes**: `(chat_id, created_at, id) WHERE deleted_at IS NULL` for deterministic chronological scans, latest-N retrieval, and thread summary range selection (partial index excluding soft-deleted rows)
+
+**Ordering note (normative)**: Any server-side message selection that depends on a stable frontier, including thread summary compression, MUST use the strict total order `(created_at ASC, id ASC)` or its exact descending inverse. `created_at` alone is insufficient because multiple messages may share the same timestamp. `id` is used only as a deterministic UUID tie-breaker.
 
 **Secure ORM**: No independent `#[secure]` — accessed through parent chat. Queries are filtered by `chat_id` obtained from a scoped chat query.
 
@@ -1761,6 +1909,48 @@ Writers MUST populate `chat_id` from the parent message's `messages.chat_id` (no
 - The `attachments` array in the API `Message` object is derived via a lateral join from `message_attachments` to `attachments` in the `listMessages` query, projecting only the `AttachmentSummary` fields (`attachment_id`, `kind`, `filename`, `status`, `img_thumbnail`).
 - For assistant and system messages, the join table will have zero rows (empty `attachments` array in API response).
 
+#### Table: thread_summary_tasks
+
+- [ ] `p1` - **ID**: `cpt-cf-mini-chat-dbtable-thread-summary-tasks`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | UUID | Task identifier |
+| chat_id | UUID | Parent chat (FK -> chats.id) |
+| base_frontier_created_at | TIMESTAMPTZ | Base frontier `created_at` component (nullable only when the chat has no committed `thread_summaries` row yet) |
+| base_frontier_message_id | UUID | Base frontier `id` component (nullable only when the chat has no committed `thread_summaries` row yet) |
+| frozen_target_created_at | TIMESTAMPTZ | Frozen target frontier `created_at` component |
+| frozen_target_message_id | UUID | Frozen target frontier `id` component |
+| status | TEXT | Task lifecycle state: `pending`, `claimed`, `completed`, `stale`, or `failed` |
+| claimed_by | TEXT | Leader identity that claimed the task (nullable; pod name or process identity) |
+| claimed_at | TIMESTAMPTZ | Durable claim timestamp (nullable) |
+| last_error | TEXT | Last execution error for failed tasks (nullable) |
+| created_at | TIMESTAMPTZ | Creation time (NOT NULL, DEFAULT now()) |
+| updated_at | TIMESTAMPTZ | Last update time (NOT NULL, DEFAULT now()) |
+
+**PK**: `id`
+
+**Constraints**: FK `chat_id` -> `chats.id` ON DELETE CASCADE. NOT NULL on `chat_id`, `frozen_target_created_at`, `frozen_target_message_id`, `status`, `created_at`, `updated_at`. CHECK `status IN ('pending', 'claimed', 'completed', 'stale', 'failed')`. CHECK `(base_frontier_created_at IS NULL) = (base_frontier_message_id IS NULL)`. The tuple `(chat_id, base_frontier_created_at, base_frontier_message_id, frozen_target_created_at, frozen_target_message_id)` uniquely identifies the frozen summary range. The implementation MUST enforce uniqueness of automatic tasks for that frozen summary range, including the empty-frontier case where both `base_frontier_*` columns are NULL. `base_frontier_*` columns are NULL only when the chat has no committed `thread_summaries` row yet.
+
+**Implementation note**: In Postgres, a standard UNIQUE constraint does not treat `NULL` values as equal. Therefore, the implementation MUST enforce frozen-range uniqueness for the empty-frontier case explicitly, for example via:
+- a partial unique index for rows where both `base_frontier_*` columns are NULL, plus
+- a separate unique index for rows where both `base_frontier_*` columns are NOT NULL,
+or an equivalent generated-key strategy.
+
+**Indexes**: `(status, created_at)` for pending task discovery and reconciliation scans; `(status, claimed_at)` for abandonment and reclaim scans.
+
+**Status semantics (normative)**:
+
+- `pending` — durable task exists and is awaiting claim by the active leader.
+- `claimed` — task has been durably claimed by a leader and is in progress.
+- `completed` — the successful summary commit already advanced the frontier.
+- `stale` — another worker or task already advanced the frontier and this task can no longer commit.
+- `failed` — the LLM call or execution failed and the frontier was not advanced.
+
+**Durable task semantics (normative)**: This table is the authoritative source of truth for automatic thread summary task existence, deduplication, claim state, recovery, and failover safety. It is independent from `chat_turns` and is not user-visible.
+
+**Secure ORM**: No independent `#[secure]` — accessed through parent chat for internal/system use only. Background worker queries MUST operate on this table as system-owned internal state.
+
 #### Table: thread_summaries
 
 - [ ] `p1` - **ID**: `cpt-cf-mini-chat-dbtable-thread-summaries`
@@ -1770,14 +1960,31 @@ Writers MUST populate `chat_id` from the parent message's `messages.chat_id` (no
 | id | UUID | Summary identifier |
 | chat_id | UUID | Parent chat (FK -> chats.id, UNIQUE) |
 | summary_text | TEXT | Compressed conversation summary |
-| summarized_up_to | UUID | Last message ID included in this summary |
+| summarized_up_to_created_at | TIMESTAMPTZ | Inclusive summary frontier `created_at` component |
+| summarized_up_to_message_id | UUID | Inclusive summary frontier `id` component paired with `summarized_up_to_created_at`; together they identify the last message included in `summary_text` |
 | token_estimate | INTEGER | Estimated token count of summary |
 | created_at | TIMESTAMPTZ | Creation time (NOT NULL, DEFAULT now()) |
 | updated_at | TIMESTAMPTZ | Last update time (NOT NULL, DEFAULT now()) |
 
 **PK**: `id`
 
-**Constraints**: UNIQUE on `chat_id`. FK `chat_id` -> `chats.id` ON DELETE CASCADE. NOT NULL on `created_at`, `updated_at`. 1:1 relationship with chat enforced by UNIQUE(chat_id).
+**Constraints**: UNIQUE on `chat_id`. FK `chat_id` -> `chats.id` ON DELETE CASCADE. NOT NULL on `summarized_up_to_created_at`, `summarized_up_to_message_id`, `created_at`, `updated_at`. 1:1 relationship with chat enforced by UNIQUE(chat_id).
+
+**Frontier semantics (normative)**: The pair `(summarized_up_to_created_at, summarized_up_to_message_id)` is the inclusive summary frontier in the per-chat message order `(created_at ASC, id ASC)`. A missing `thread_summaries` row means no messages have been summarized yet.
+
+**Initial state**:
+
+A `thread_summaries` row MUST be created only when the first successful thread summary is committed.
+
+Before that point, the chat has no `thread_summaries` row and its summary frontier is considered empty.
+
+**Committed state only (normative)**:
+
+`thread_summaries` stores only committed summary state for the chat.
+
+It MUST NOT be used as the sole storage for pending or in-flight summary work.
+
+Pending and in-flight automatic summary work MUST be stored in `thread_summary_tasks`.
 
 **Secure ORM**: No independent `#[secure]` — accessed through parent chat.
 
