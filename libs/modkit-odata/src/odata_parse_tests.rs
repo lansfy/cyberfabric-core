@@ -1,6 +1,6 @@
-use bigdecimal::BigDecimal;
 use crate::CompareOperator::{self, *};
 use crate::{Expr, Value, parse_str};
+use bigdecimal::BigDecimal;
 use std::str::FromStr;
 
 #[test]
@@ -826,4 +826,12 @@ fn multiple_nested_functions() {
             .into()
         )
     );
+}
+
+#[test]
+fn deeply_nested_unmatched_parens_does_not_hang() {
+    // Pathological input: unmatched parentheses must fail fast, not consume
+    // exponential memory/time due to backtracking.
+    let result = parse_str("((((EAEAEAE(((EAEA((AE(((EAEAEEE");
+    assert!(result.is_err());
 }

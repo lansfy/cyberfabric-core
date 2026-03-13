@@ -17,7 +17,7 @@ use uuid::Uuid;
 /// let filter = "name eq 'John' and isActive eq true";
 /// let result = parse_str(filter).expect("valid filter tree");
 /// ```
-pub(crate) fn parse_str(query: impl AsRef<str>) -> Result<Expr, ParseError> {
+pub fn parse_str(query: impl AsRef<str>) -> Result<Expr, ParseError> {
     match odata_filter::parse_str(query.as_ref().trim()) {
         Ok(expr) => expr,
         Err(_error) => Err(ParseError::Parsing),
@@ -28,6 +28,11 @@ enum AfterValueExpr {
     Compare(CompareOperator, Box<Expr>),
     In(Vec<Expr>),
     End,
+}
+
+enum FilterTail {
+    Or(Result<Expr, ParseError>),
+    And(Result<Expr, ParseError>),
 }
 
 peg::parser! {
@@ -42,9 +47,18 @@ peg::parser! {
         /// Parses a filter expression.
         rule filter() -> Result<Expr, ParseError>
             = "not" _ e:filter() { Ok(Expr::Not(Box::new(e?))) }
-            / l:any_expr() _ "or" _ r:filter() { Ok(Expr::Or(Box::new(l?), Box::new(r?))) }
-            / l:any_expr() _ "and" _ r:filter() { Ok(Expr::And(Box::new(l?), Box::new(r?))) }
-            / any_expr()
+            / l:any_expr() t:filter_tail()? {
+                match t {
+                    None => l,
+                    Some(super::FilterTail::Or(r)) => Ok(Expr::Or(Box::new(l?), Box::new(r?))),
+                    Some(super::FilterTail::And(r)) => Ok(Expr::And(Box::new(l?), Box::new(r?))),
+                }
+            }
+
+        /// Parses the optional `or`/`and` tail after an expression.
+        rule filter_tail() -> super::FilterTail
+            = _ "or" _ r:filter() { super::FilterTail::Or(r) }
+            / _ "and" _ r:filter() { super::FilterTail::And(r) }
 
         /// Parses any expression, including grouped expressions and value expressions.
         rule any_expr() -> Result<Expr, ParseError>

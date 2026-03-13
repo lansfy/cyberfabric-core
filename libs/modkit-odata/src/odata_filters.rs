@@ -3,11 +3,11 @@ use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use thiserror::Error;
 use uuid::Uuid;
 
-pub(crate) use crate::odata_parse::parse_str;
+pub use crate::odata_parse::parse_str;
 
 /// Represents various errors that can occur during parsing.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub(crate) enum ParseError {
+pub enum ParseError {
     /// Error during general parsing.
     #[error("Error during general parsing.")]
     Parsing,
@@ -47,7 +47,7 @@ pub(crate) enum ParseError {
 
 /// Represents the different types of expressions in the AST.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Expr {
+pub enum Expr {
     /// Logical OR between two expressions.
     Or(Box<Expr>, Box<Expr>),
 
@@ -75,7 +75,7 @@ pub(crate) enum Expr {
 
 /// Represents the various comparison operators.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CompareOperator {
+pub enum CompareOperator {
     /// Equal to.
     Equal,
 
@@ -97,7 +97,7 @@ pub(crate) enum CompareOperator {
 
 /// Represents the various value types.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Value {
+pub enum Value {
     /// Null value.
     Null,
 
