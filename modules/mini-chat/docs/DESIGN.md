@@ -820,7 +820,7 @@ To support reconnect UX and reduce support reliance on direct DB inspection, the
 - `request_id`
 - `state`: `running|done|error|cancelled`
 - `error_code` (nullable string) — terminal error code when `state` is `error` (e.g. `provider_error`, `orphan_timeout`). Null for non-error states and while running. Mapped from `chat_turns.error_code`. Provider identifiers and billing outcome are not exposed.
-- `assistant_message_id` (nullable UUID) — persisted assistant message ID when `state` is `done`. Null while running, on error, or on cancellation. Allows clients to fetch the assistant message directly without listing all messages.
+- `assistant_message_id` (nullable UUID) — persisted assistant message ID. Present when `state` is `done`. Present when `state` is `cancelled` if partial content was persisted (non-empty accumulated text at cancellation point). Null while `running` or on `error`. Allows clients to fetch the assistant message directly without listing all messages.
 - `updated_at`
 
 Turn Status is authoritative for lifecycle state resolution after disconnect. `error_code` provides actionable terminal error categorization so clients can display an appropriate error message without further queries. `assistant_message_id` lets clients fetch the completed assistant message directly by ID without scanning full message history; retrieving the message content itself requires one follow-up request (`GET /v1/chats/{id}/messages?$filter=id eq '{assistant_message_id}'`). Billing outcome, internal settlement details, and provider internals are not exposed via this endpoint in P1.
@@ -868,7 +868,16 @@ UI guidance: if the SSE stream disconnects before a terminal event, the UI SHOUL
 
 #### SSE Event Definitions
 
-Six event types. The stream always ends with exactly one terminal event: `done` or `error`. Image-bearing turns use the same event types; no new SSE events are required for image support. The `citations` event MAY include items from both `file_search` (`source="file"`) and `web_search` (`source="web"`). Image inputs do not produce citations by themselves.
+Seven event types. The stream always begins with `turn_started` (carrying the server-generated `request_id`) and ends with exactly one terminal event: `done` or `error`. Image-bearing turns use the same event types; no new SSE events are required for image support. The `citations` event MAY include items from both `file_search` (`source="file"`) and `web_search` (`source="web"`). Image inputs do not produce citations by themselves.
+
+##### `event: turn_started`
+
+Emitted once at stream start, before any content events. Carries the server-generated `request_id` for this turn. Present on `POST /messages:stream`, `POST /turns/{id}/retry`, and `PATCH /turns/{id}`.
+
+```
+event: turn_started
+data: {"request_id": "550e8400-e29b-41d4-a716-446655440000"}
+```
 
 ##### `event: delta`
 
@@ -1008,7 +1017,7 @@ A well-formed stream follows this ordering:
 **P1 normative ordering**:
 
 ```text
-ping*  (delta | tool)*  citations?  (done | error)
+turn_started  ping*  (delta | tool)*  citations?  (done | error)
 ```
 
 - Zero or more `ping` events may appear at any point before terminal.
@@ -1910,7 +1919,7 @@ Tracks idempotency and in-progress generation state for `request_id`. This avoid
 | state | VARCHAR(16) | `running`, `completed`, `failed`, `cancelled` |
 | provider_name | VARCHAR(128) | Provider GTS identifier (nullable until request starts). Same GTS format as `messages.provider_name`. |
 | provider_response_id | VARCHAR(128) | Provider response ID (nullable) |
-| assistant_message_id | UUID | Persisted assistant message ID (nullable until completed) |
+| assistant_message_id | UUID | Persisted assistant message ID (nullable — set for `completed` and `cancelled`-with-content turns) |
 | error_code | VARCHAR(64) | Terminal error code (nullable) |
 | reserve_tokens | BIGINT | Preflight token reserve (`estimated_input_tokens + max_output_tokens_applied`). Persisted at preflight before any outbound provider call. Nullable - NULL only for turns that fail before a reserve is taken (pre-reserve failures). Immutable after insert. Used for deterministic reconciliation under ABORTED and post-provider-start FAILED outcomes (sections 5.7, 5.8, 5.9). |
 | max_output_tokens_applied | INTEGER | The `max_output_tokens` value used at preflight for this turn. Persisted at preflight (same time as `reserve_tokens`). Nullable — NULL only for pre-reserve failures. Immutable after insert. Required for deterministic derivation of `estimated_input_tokens` at settlement time: `estimated_input_tokens = reserve_tokens - max_output_tokens_applied` (sections 5.8, 5.9). |
@@ -3944,7 +3953,7 @@ Orphan watchdog timeout MUST be bounded to prevent indefinite user-visible lock 
 
 The following are explicitly out of scope for P1 crash recovery:
 
-- **No partial delta persistence**: streamed deltas are not persisted incrementally during normal streaming operation. If the pod crashes mid-stream, partial text is lost. On user-initiated cancellation, the accumulated in-memory content up to the cancel point MAY be persisted as a single final partial message (see cancellation sequence above); this is a one-time snapshot, not incremental delta persistence. No replay or resume from partial content is supported.
+- **No partial delta persistence**: streamed deltas are not persisted incrementally during normal streaming operation. If the pod crashes mid-stream, partial text is lost. On user-initiated cancellation, the accumulated in-memory content up to the cancel point is persisted as a single final partial message when non-empty (see cancellation sequence above); this is a one-time snapshot, not incremental delta persistence. The persisted partial message participates in conversation history and context assembly for subsequent turns. No replay or resume from partial content is supported.
 - **No resume-from-delta**: the system does not resume generation from the last streamed token after a crash.
 - **No event sourcing**: turn state is a simple row update, not an append-only event log.
 - **No cross-pod streaming recovery**: a stream cannot be handed off from a crashed pod to a surviving pod. Recovery is client-driven via the turn status API.
@@ -5330,7 +5339,8 @@ Deterministic reconciliation for `ABORTED` and post-provider-start `FAILED` outc
 
 **Clarification (normative):** “Single shared function” does NOT require a single DB update shape. The function MAY branch internally by terminal outcome:
 - For `completed` (including provider `response.incomplete`): finalize via the “completed” CAS path that sets `assistant_message_id` and MUST keep `chat_turns.error_code = NULL`. Any incomplete/truncation reason MUST be recorded only as `completion_signal` in audit/outbox payloads and the `mini_chat_stream_incomplete_total{reason}` metric.
-- For `failed` / `cancelled`: finalize via the “terminal state” CAS path that may set `error_code` / `error_detail` as specified elsewhere in this section.
+- For `cancelled` with non-empty accumulated text: persist the partial assistant message and set `assistant_message_id` (same INSERT + SET sequence as completed), but do NOT retry-as-failed on persistence failure — best-effort only, log at `warn` and finalize as `cancelled` with `assistant_message_id = NULL`.
+- For `failed` / `cancelled` with empty text: finalize via the “terminal state” CAS path that may set `error_code` / `error_detail` as specified elsewhere in this section.
 
 #### Dedupe Key Requirement for Quota-Bearing Events (Normative)
 

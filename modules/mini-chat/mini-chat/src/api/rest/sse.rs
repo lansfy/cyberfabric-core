@@ -3,7 +3,7 @@
 //! - `into_sse_event()`: converts domain `StreamEvent` to Axum SSE `Event`
 //! - `From<ClientSseEvent>`: translates provider events to domain events
 //! - `StreamPhase`: state machine enforcing the ordering grammar
-//!   `ping* (delta | tool)* citations? (done | error)`
+//!   `turn_started ping* (delta | tool)* citations? (done | error)`
 
 use axum::response::sse::Event;
 
@@ -21,6 +21,7 @@ impl StreamEvent {
     /// and `data:` JSON payload.
     pub fn into_sse_event(self) -> Result<Event, axum::Error> {
         match self {
+            StreamEvent::TurnStarted(d) => Event::default().event("turn_started").json_data(&d),
             StreamEvent::Ping => Ok(Event::default().event("ping").data("{}")),
             StreamEvent::Delta(d) => Event::default().event("delta").json_data(&d),
             StreamEvent::Tool(t) => Event::default().event("tool").json_data(&t),
@@ -64,6 +65,7 @@ impl From<ClientSseEvent> for StreamEvent {
 impl std::fmt::Display for StreamEventKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::TurnStarted => f.write_str("TurnStarted"),
             Self::Ping => f.write_str("Ping"),
             Self::Delta => f.write_str("Delta"),
             Self::Tool => f.write_str("Tool"),
@@ -77,15 +79,18 @@ impl std::fmt::Display for StreamEventKind {
 // StreamPhase — event ordering state machine
 // ════════════════════════════════════════════════════════════════════════════
 
-/// Enforces the SSE ordering grammar: `ping* (delta | tool)* citations? (done | error)`.
+/// Enforces the SSE ordering grammar:
+/// `turn_started ping* (delta | tool)* citations? (done | error)`.
 ///
 /// Delta and tool events may interleave freely within the `Streaming` phase.
 /// Only forward transitions are allowed. Out-of-order events produce an
 /// [`OrderingViolation`] error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamPhase {
-    /// Before any events. Accepts ping, delta, tool, citations, terminal.
+    /// Before any events. Accepts `turn_started`, ping, delta, tool, citations, terminal.
     Idle,
+    /// After `turn_started`. Same transitions as `Idle` except `turn_started` (exactly-once).
+    Started,
     /// After one or more pings. Accepts ping, delta, tool, citations, terminal.
     Pinging,
     /// After first delta or tool. Accepts delta, tool, citations, terminal.
@@ -117,6 +122,7 @@ impl std::fmt::Display for StreamPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Idle => f.write_str("Idle"),
+            Self::Started => f.write_str("Started"),
             Self::Pinging => f.write_str("Pinging"),
             Self::Streaming => f.write_str("Streaming"),
             Self::Citations => f.write_str("Citations"),
@@ -147,20 +153,30 @@ impl StreamPhase {
             // Terminal events are always accepted from non-terminal phases
             (_, StreamEventKind::Terminal) => Ok(StreamPhase::Terminal),
 
-            // Ping: only from Idle or Pinging
-            (StreamPhase::Idle | StreamPhase::Pinging, StreamEventKind::Ping) => {
-                Ok(StreamPhase::Pinging)
-            }
+            // TurnStarted: only from Idle (exactly-once)
+            (StreamPhase::Idle, StreamEventKind::TurnStarted) => Ok(StreamPhase::Started),
 
-            // Delta or Tool: from Idle, Pinging, or Streaming
+            // Ping: from Idle, Started, or Pinging
             (
-                StreamPhase::Idle | StreamPhase::Pinging | StreamPhase::Streaming,
+                StreamPhase::Idle | StreamPhase::Started | StreamPhase::Pinging,
+                StreamEventKind::Ping,
+            ) => Ok(StreamPhase::Pinging),
+
+            // Delta or Tool: from Idle, Started, Pinging, or Streaming
+            (
+                StreamPhase::Idle
+                | StreamPhase::Started
+                | StreamPhase::Pinging
+                | StreamPhase::Streaming,
                 StreamEventKind::Delta | StreamEventKind::Tool,
             ) => Ok(StreamPhase::Streaming),
 
-            // Citations: from Idle, Pinging, or Streaming (at most once)
+            // Citations: from Idle, Started, Pinging, or Streaming (at most once)
             (
-                StreamPhase::Idle | StreamPhase::Pinging | StreamPhase::Streaming,
+                StreamPhase::Idle
+                | StreamPhase::Started
+                | StreamPhase::Pinging
+                | StreamPhase::Streaming,
                 StreamEventKind::Citations,
             ) => Ok(StreamPhase::Citations),
 
@@ -449,5 +465,109 @@ mod tests {
         let mut phase = StreamPhase::Idle;
         phase = phase.try_advance(StreamEventKind::Tool).unwrap();
         assert!(phase.try_advance(StreamEventKind::Ping).is_err());
+    }
+
+    // ── TurnStarted / Started phase tests ──
+
+    #[test]
+    fn phase_idle_accepts_turn_started() {
+        assert_eq!(
+            StreamPhase::Idle
+                .try_advance(StreamEventKind::TurnStarted)
+                .unwrap(),
+            StreamPhase::Started
+        );
+    }
+
+    #[test]
+    fn phase_started_accepts_all_content_kinds() {
+        assert_eq!(
+            StreamPhase::Started
+                .try_advance(StreamEventKind::Ping)
+                .unwrap(),
+            StreamPhase::Pinging
+        );
+        assert_eq!(
+            StreamPhase::Started
+                .try_advance(StreamEventKind::Delta)
+                .unwrap(),
+            StreamPhase::Streaming
+        );
+        assert_eq!(
+            StreamPhase::Started
+                .try_advance(StreamEventKind::Tool)
+                .unwrap(),
+            StreamPhase::Streaming
+        );
+        assert_eq!(
+            StreamPhase::Started
+                .try_advance(StreamEventKind::Citations)
+                .unwrap(),
+            StreamPhase::Citations
+        );
+        assert_eq!(
+            StreamPhase::Started
+                .try_advance(StreamEventKind::Terminal)
+                .unwrap(),
+            StreamPhase::Terminal
+        );
+    }
+
+    #[test]
+    fn phase_started_rejects_turn_started() {
+        assert!(
+            StreamPhase::Started
+                .try_advance(StreamEventKind::TurnStarted)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn turn_started_then_ping_then_deltas_then_done() {
+        let mut phase = StreamPhase::Idle;
+        phase = phase.try_advance(StreamEventKind::TurnStarted).unwrap();
+        assert_eq!(phase, StreamPhase::Started);
+        phase = phase.try_advance(StreamEventKind::Ping).unwrap();
+        assert_eq!(phase, StreamPhase::Pinging);
+        phase = phase.try_advance(StreamEventKind::Delta).unwrap();
+        assert_eq!(phase, StreamPhase::Streaming);
+        phase = phase.try_advance(StreamEventKind::Delta).unwrap();
+        assert_eq!(phase, StreamPhase::Streaming);
+        phase = phase.try_advance(StreamEventKind::Terminal).unwrap();
+        assert_eq!(phase, StreamPhase::Terminal);
+    }
+
+    #[test]
+    fn turn_started_then_tool_delta_citations_done() {
+        let mut phase = StreamPhase::Idle;
+        phase = phase.try_advance(StreamEventKind::TurnStarted).unwrap();
+        assert_eq!(phase, StreamPhase::Started);
+        phase = phase.try_advance(StreamEventKind::Tool).unwrap();
+        assert_eq!(phase, StreamPhase::Streaming);
+        phase = phase.try_advance(StreamEventKind::Delta).unwrap();
+        assert_eq!(phase, StreamPhase::Streaming);
+        phase = phase.try_advance(StreamEventKind::Citations).unwrap();
+        assert_eq!(phase, StreamPhase::Citations);
+        phase = phase.try_advance(StreamEventKind::Terminal).unwrap();
+        assert_eq!(phase, StreamPhase::Terminal);
+    }
+
+    #[test]
+    fn idle_still_accepts_delta_directly_backwards_compat() {
+        let mut phase = StreamPhase::Idle;
+        phase = phase.try_advance(StreamEventKind::Delta).unwrap();
+        assert_eq!(phase, StreamPhase::Streaming);
+        phase = phase.try_advance(StreamEventKind::Terminal).unwrap();
+        assert_eq!(phase, StreamPhase::Terminal);
+    }
+
+    #[test]
+    fn turn_started_converts_to_sse_event() {
+        use crate::domain::stream_events::TurnStartedData;
+        let event = StreamEvent::TurnStarted(TurnStartedData {
+            request_id: uuid::Uuid::new_v4(),
+        });
+        let sse = event.into_sse_event();
+        assert!(sse.is_ok());
     }
 }

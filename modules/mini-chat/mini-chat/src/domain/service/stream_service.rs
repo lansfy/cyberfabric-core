@@ -20,7 +20,7 @@ use crate::domain::repos::{
     MessageAttachmentRepository, MessageRepository, QuotaUsageRepository, SnapshotBoundary,
     ThreadSummaryRepository, TurnRepository, VectorStoreRepository,
 };
-use crate::domain::stream_events::{DoneData, ErrorData, StreamEvent};
+use crate::domain::stream_events::{DoneData, ErrorData, StreamEvent, TurnStartedData};
 use crate::infra::db::entity::chat_turn::{Model as TurnModel, TurnState};
 use crate::infra::llm::{
     ClientSseEvent, LlmMessage, LlmProvider, LlmProviderError, LlmRequestBuilder, LlmTool,
@@ -767,6 +767,15 @@ impl<
             .replace("{model}", &provider_model_id);
         let proxy_path = format!("{}{api_path}", resolved_provider.upstream_alias);
 
+        // Emit turn_started before handing tx to the provider task (D3).
+        if tx
+            .send(StreamEvent::TurnStarted(TurnStartedData { request_id }))
+            .await
+            .is_err()
+        {
+            warn!(%request_id, "turn_started send failed (client disconnected before first event)");
+        }
+
         Ok(spawn_provider_task(
             resolved_provider.adapter,
             proxy_path,
@@ -1335,6 +1344,15 @@ impl<
             .api_path
             .replace("{model}", &provider_model_id);
         let proxy_path = format!("{}{api_path}", resolved_provider.upstream_alias);
+
+        // Emit turn_started before handing tx to the provider task (D3).
+        if tx
+            .send(StreamEvent::TurnStarted(TurnStartedData { request_id }))
+            .await
+            .is_err()
+        {
+            warn!(%request_id, "turn_started send failed (client disconnected before first event)");
+        }
 
         Ok(spawn_provider_task(
             resolved_provider.adapter,
@@ -3339,7 +3357,9 @@ mod tests {
             .await
             .expect("should start stream");
 
-        // Read the first delta
+        // Read the turn_started event, then the first delta
+        let started = rx.recv().await.expect("should get turn_started");
+        assert!(matches!(started, StreamEvent::TurnStarted(_)));
         let first = rx.recv().await.expect("should get delta");
         assert!(matches!(first, StreamEvent::Delta(_)));
 
@@ -3367,6 +3387,11 @@ mod tests {
         assert!(
             turn.completed_at.is_some(),
             "completed_at should be set after CAS finalization"
+        );
+        // D4: cancelled turn with accumulated text should have assistant_message_id
+        assert!(
+            turn.assistant_message_id.is_some(),
+            "cancelled turn with partial text should have assistant_message_id"
         );
     }
 
@@ -5381,11 +5406,13 @@ mod tests {
             .await
             .expect("should succeed");
 
-        // Wait for the first delta to arrive, then cancel
-        let ev = rx.recv().await.expect("should receive at least one event");
+        // Wait for turn_started and first delta to arrive, then cancel
+        let started = rx.recv().await.expect("should get turn_started");
+        assert!(matches!(started, StreamEvent::TurnStarted(_)));
+        let ev = rx.recv().await.expect("should receive delta");
         assert!(
             matches!(ev, StreamEvent::Delta(_)),
-            "first event should be a delta"
+            "second event should be a delta"
         );
         cancel.cancel();
 
