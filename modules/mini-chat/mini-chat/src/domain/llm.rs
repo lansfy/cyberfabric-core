@@ -192,6 +192,7 @@ pub struct TextSpan {
 }
 
 /// Resolved attachment identity returned by [`build_provider_file_id_map`].
+#[domain_model]
 #[derive(Debug, Clone)]
 pub struct AttachmentRef {
     pub id: Uuid,

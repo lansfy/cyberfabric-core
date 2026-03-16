@@ -658,6 +658,10 @@ pub struct RagConfig {
     /// Maximum single image file size in KB.
     #[serde(default = "default_max_image_size_kb")]
     pub max_image_size_kb: u32,
+
+    /// Accept `text/csv` uploads remapped to `text/plain` for `file_search`.
+    #[serde(default = "default_true")]
+    pub allow_csv_upload: bool,
 }
 
 impl Default for RagConfig {
@@ -667,6 +671,7 @@ impl Default for RagConfig {
             max_total_upload_mb_per_chat: default_max_total_upload_mb_per_chat(),
             max_document_size_kb: default_max_document_size_kb(),
             max_image_size_kb: default_max_image_size_kb(),
+            allow_csv_upload: true,
         }
     }
 }

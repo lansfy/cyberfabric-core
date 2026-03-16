@@ -926,7 +926,7 @@ data: {"items": [{"source": "file", "title": "Q3 Report.pdf", "attachment_id": "
 | Field | Type | Description |
 |-------|------|-------------|
 | `items[].source` | `"file"` \| `"web"` | Citation source type. |
-| `items[].title` | string | Document or page title. |
+| `items[].title` | string | Citation title. For file citations (`source="file"`), contains the original uploaded filename (e.g. `"Q3_Report.pdf"`). For web citations (`source="web"`), contains the page title. |
 | `items[].url` | string (optional) | URL for web sources. |
 | `items[].attachment_id` | UUID (optional) | Internal attachment identifier for file sources. This is the only file identifier exposed to clients. |
 | `items[].span` | object (optional) | Reserved for mapping citations to the final assistant text. If provided: `{ "start": number, "end": number }` character offsets into the full assistant output. |
@@ -2992,21 +2992,21 @@ Retrieved file search excerpts are integrated into the prompt as follows:
 5. Retrieved chunks are subject to the token budget truncation rules in Context Plan Assembly: thread summary and system prompt always have higher priority; retrieval excerpts are truncated first when the budget is exceeded.
 6. Maximum retrieved chunks per turn and maximum retrieved tokens per turn are configurable (see RAG defaults below).
 
-#### Citation File ID Resolution
+#### Citation File ID and Title Resolution
 
-File citations returned by the provider include a provider-specific file identifier (`provider_file_id`) in the annotation payload. Before constructing the client-visible citation object, the backend MUST resolve this provider identifier to the internal `attachment_id` used by the Mini Chat system.
+File citations returned by the provider include a provider-specific file identifier (`provider_file_id`) in the annotation payload. Before constructing the client-visible citation object, the backend MUST resolve this provider identifier to the internal `attachment_id` and populate the `title` field with the original uploaded `filename` from the `attachments` table.
 
 Resolution is performed by a lookup in the `attachments` table:
 
 ```
-(chat_id, provider_file_id) → attachment_id
+(chat_id, provider_file_id) → (attachment_id, filename)
 ```
 
-The lookup MUST be restricted to the current `chat_id` to preserve tenant and chat isolation. Raw `provider_file_id` values MUST NOT be exposed in API responses. The citation payload returned to the client MUST contain the internal `attachment_id` only.
+The lookup MUST be restricted to the current `chat_id` to preserve tenant and chat isolation. Raw `provider_file_id` values MUST NOT be exposed in API responses. The citation payload returned to the client MUST contain the internal `attachment_id` and the human-readable `filename` as the citation `title`.
 
 **Citation resolution rules**:
 
-1. If a matching attachment row is found and the attachment is not soft-deleted (`deleted_at IS NULL`), the citation MUST include the corresponding `attachment_id`.
+1. If a matching attachment row is found and the attachment is not soft-deleted (`deleted_at IS NULL`), the citation MUST include the corresponding `attachment_id` and set `title` to the attachment's `filename`.
 2. If no matching attachment is found (e.g., provider returns an unknown file ID), the citation MUST be omitted from the `citations` event. The backend MUST NOT expose the raw `provider_file_id` to the client.
 3. If the attachment exists but is soft-deleted (`deleted_at IS NOT NULL`), the citation MUST be omitted. The raw provider identifier MUST NOT be returned.
 4. The `attachments` table MUST maintain an index on `(chat_id, provider_file_id)` to ensure deterministic and efficient lookup.

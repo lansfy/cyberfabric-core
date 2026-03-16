@@ -487,14 +487,40 @@ impl<
         content_type: &str,
         file_bytes: Bytes,
     ) -> Result<AttachmentModel, DomainError> {
-        use crate::domain::mime_validation::{structured_filename, validate_mime};
+        use crate::domain::mime_validation::{
+            infer_mime_from_extension, normalize_mime, remap_csv_to_plain, structured_filename,
+            validate_mime,
+        };
         use crate::domain::repos::InsertAttachmentParams;
 
         let tenant_id = ctx.subject_tenant_id();
         let user_id = ctx.subject_id();
 
         // 1. MIME validate
-        let validated = validate_mime(content_type)?;
+        // Step A: infer from extension when client sends octet-stream
+        let effective_ct = if normalize_mime(content_type) == "application/octet-stream"
+            && let Some(inferred) = infer_mime_from_extension(&filename)
+        {
+            tracing::debug!(
+                original = %content_type,
+                inferred,
+                filename = %filename,
+                "MIME inferred from file extension (client sent octet-stream)"
+            );
+            inferred
+        } else {
+            content_type
+        };
+        // Step B: remap CSV → text/plain when allowed
+        let effective_ct = if self.rag_config.allow_csv_upload
+            && let Some(remapped) = remap_csv_to_plain(effective_ct)
+        {
+            tracing::debug!(original = %effective_ct, remapped, "CSV content-type remapped to text/plain");
+            remapped
+        } else {
+            effective_ct
+        };
+        let validated = validate_mime(effective_ct)?;
         let is_document = validated.kind == AttachmentKind::Document;
 
         #[allow(clippy::cast_possible_wrap)]
