@@ -497,7 +497,7 @@ fn showcase_unknown() {
             "type": "gts://gts.cf.core.errors.err.v1~cf.core.err.unknown.v1~",
             "title": "Unknown",
             "status": 500,
-            "detail": "Unexpected response from payment provider",
+            "detail": "An unknown error occurred",
             "context": {
                 "resource_type": "gts.cf.core.users.user.v1~"
             }

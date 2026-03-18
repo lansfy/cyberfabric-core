@@ -139,10 +139,9 @@ impl CanonicalError {
     #[doc(hidden)]
     #[must_use]
     pub(crate) fn __unknown(ctx: Unknown) -> Self {
-        let detail = ctx.description.clone();
         Self::Unknown {
             ctx,
-            detail,
+            detail: String::from("An unknown error occurred"),
             resource_type: None,
             resource_name: None,
         }
@@ -444,6 +443,21 @@ impl CanonicalError {
             | Self::DataLoss { resource_name, .. }
             | Self::Unauthenticated { resource_name, .. } => resource_name.as_deref(),
             Self::Internal { .. } => None,
+        }
+    }
+
+    /// Returns the internal diagnostic string for `Internal` and `Unknown`
+    /// variants, or `None` for all other categories.
+    ///
+    /// Middleware should call this **before** converting to `Problem` so
+    /// that the real cause can be logged server-side with the `trace_id`.
+    /// The diagnostic is never included in production wire responses.
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<&str> {
+        match self {
+            Self::Internal { ctx, .. } => Some(&ctx.description),
+            Self::Unknown { ctx, .. } => Some(&ctx.description),
+            _ => None,
         }
     }
 

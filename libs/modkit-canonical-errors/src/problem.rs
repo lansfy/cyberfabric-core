@@ -50,6 +50,27 @@ impl Problem {
         }
     }
 
+    /// Convert a `CanonicalError` to a `Problem`, including the internal
+    /// diagnostic string in the `context` for `Internal` and `Unknown`
+    /// variants.
+    ///
+    /// **This method MUST NOT be used in production.** It exists so that
+    /// development and test environments can surface the real error cause
+    /// in the wire response for easier debugging.
+    ///
+    /// In production, use [`from_error`](Self::from_error) instead — it
+    /// never leaks the diagnostic string.
+    #[must_use]
+    pub fn from_error_debug(err: &CanonicalError) -> Self {
+        let mut problem = Self::from_error(err);
+
+        if let Some(diag) = err.diagnostic() {
+            problem.context["description"] = serde_json::Value::String(diag.to_owned());
+        }
+
+        problem
+    }
+
     /// Set the `trace_id` field, returning `self` for chaining.
     #[must_use]
     pub fn with_trace_id(mut self, trace_id: impl Into<String>) -> Self {

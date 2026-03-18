@@ -677,7 +677,10 @@ where
             }
         };
 
-        let mut err = if matches!(err, CanonicalError::Internal { .. }) {
+        let mut err = if matches!(
+            err,
+            CanonicalError::Internal { .. } | CanonicalError::Unknown { .. }
+        ) {
             err
         } else {
             err.with_detail(&self.detail)
