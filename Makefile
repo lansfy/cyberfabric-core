@@ -122,16 +122,7 @@ clippy:
 
 # Validate cypilot artifacts (specs, code, templates)
 cypilot-validate:
-	@if [ ! -d .cypilot/.git ] && [ ! -f .cypilot/.git ]; then \
-		echo "Initializing .cypilot submodule (first run)"; \
-		git submodule update --init --recursive -- .cypilot; \
-	elif git -C .cypilot symbolic-ref -q HEAD >/dev/null 2>&1; then \
-		echo "Skipping .cypilot update (branch checkout detected)"; \
-	else \
-		echo "Updating .cypilot via git submodule update (detached HEAD)"; \
-		git submodule update --init --recursive -- .cypilot; \
-	fi
-	@python3 .cypilot/skills/cypilot/scripts/cypilot.py validate && echo "OK. cypilot validation PASSED" || (echo "ERROR: cypilot validation FAILED"; exit 1)
+	@python3 .cypilot/.core/skills/cypilot/scripts/cypilot.py validate && echo "OK. cypilot validation PASSED" || (echo "ERROR: cypilot validation FAILED"; exit 1)
 
 # Run markdown checks with 'lychee'
 lychee:
