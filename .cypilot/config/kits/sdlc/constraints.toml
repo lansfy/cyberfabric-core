@@ -552,6 +552,20 @@ headings = ["decomposition-entry"]
 [artifacts.DESIGN.identifiers.dbtable.references.FEATURE]
 headings = ["feature-dod"]
 
+[artifacts.DESIGN.identifiers.entity]
+kind = "entity"
+name = "Domain Entity"
+description = "A domain model entity documented in DESIGN (e.g., Session, Message, Capability)."
+template = "cpt-{system}-entity-{slug}"
+examples = ["cpt-cf-chat-engine-entity-session", "cpt-cf-chat-engine-entity-message"]
+required = false
+task = true
+priority = true
+to_code = false
+headings = ["design-tech-arch"]
+
+[artifacts.DESIGN.identifiers.entity.references]
+
 [artifacts.DESIGN.identifiers.topology]
 kind = "topology"
 name = "Topology"
