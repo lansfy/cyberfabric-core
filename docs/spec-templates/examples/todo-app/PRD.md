@@ -177,6 +177,7 @@ User data **MUST** be persisted locally immediately and synced to cloud storage 
 
 **Threshold**: Local persistence: <50ms; cloud sync: <5s when online
 **Rationale**: Module-specific requirement (project default doesn't cover offline-first + sync pattern)
+**Covers**: `cpt-examples-todo-app-upreq-modification-timestamps`
 **Architecture Allocation**: See DESIGN.md § NFR Allocation for how this is realized
 
 #### Offline Support
@@ -220,6 +221,7 @@ The system **MUST** support offline mode where task creation, completion, filter
 **Direction**: required from client (external sync backend)
 **Protocol/Format**: WebSocket + JSON for real-time task updates
 **Compatibility**: Protocol versioned independently; supports graceful degradation to polling
+**Covers**: `cpt-examples-todo-app-upreq-changes-feed`
 
 ## 8. Use Cases
 
