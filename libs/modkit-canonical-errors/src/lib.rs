@@ -1,4 +1,4 @@
-extern crate self as cf_modkit_errors;
+extern crate self as modkit_canonical_errors;
 
 pub mod builder;
 pub mod context;
@@ -11,10 +11,13 @@ pub use gts_validation::validate_gts_resource_type;
 
 pub use builder::{ResourceErrorBuilder, ServiceUnavailableBuilder};
 pub use context::{
-    Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, FailedPrecondition,
-    FieldViolation, Internal, InvalidArgument, NotFound, OutOfRange, PermissionDenied,
-    PreconditionViolation, QuotaViolation, ResourceExhausted, ServiceUnavailable, Unauthenticated,
-    Unimplemented, Unknown,
+    Aborted, AbortedV1, AlreadyExists, AlreadyExistsV1, Cancelled, CancelledV1, DataLoss,
+    DataLossV1, DeadlineExceeded, DeadlineExceededV1, FailedPrecondition, FailedPreconditionV1,
+    FieldViolation, FieldViolationV1, Internal, InternalV1, InvalidArgument, InvalidArgumentV1,
+    NotFound, NotFoundV1, OutOfRange, OutOfRangeV1, PermissionDenied, PermissionDeniedV1,
+    PreconditionViolation, PreconditionViolationV1, QuotaViolation, QuotaViolationV1,
+    ResourceExhausted, ResourceExhaustedV1, ServiceUnavailable, ServiceUnavailableV1,
+    Unauthenticated, UnauthenticatedV1, Unimplemented, UnimplementedV1, Unknown, UnknownV1,
 };
 pub use error::CanonicalError;
 pub use problem::Problem;

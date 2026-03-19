@@ -215,6 +215,7 @@ verbose_file_reads = "deny"
 modkit = { package = "cf-modkit", version = "0.5.10", path = "libs/modkit" }
 modkit-http = { package = "cf-modkit-http", version = "0.5.10", path = "libs/modkit-http" }
 modkit-auth = { package = "cf-modkit-auth", version = "0.5.10", path = "libs/modkit-auth" }
+modkit-canonical-errors = { package = "cf-modkit-canonical-errors", version = "0.5.10", path = "libs/modkit-canonical-errors" }
 modkit-db = { package = "cf-modkit-db", version = "0.5.10", path = "libs/modkit-db" }
 modkit-db-macros = { package = "cf-modkit-db-macros", version = "0.5.10", path = "libs/modkit-db-macros" }
 modkit-errors = { package = "cf-modkit-errors", version = "0.5.10", path = "libs/modkit-errors" }
@@ -226,7 +227,6 @@ modkit-odata-macros = { package = "cf-modkit-odata-macros", version = "0.5.10", 
 modkit-sdk = { package = "cf-modkit-sdk", version = "0.5.10", path = "libs/modkit-sdk" }
 modkit-security = { package = "cf-modkit-security", version = "0.5.10", path = "libs/modkit-security" }
 modkit-transport-grpc = { package = "cf-modkit-transport-grpc", version = "0.5.10", path = "libs/modkit-transport-grpc" }
-cf-modkit-errors = { package = "cf-modkit-canonical-errors", version = "0.5.10", path = "libs/modkit-canonical-errors" }
 modkit-utils = { package = "cf-modkit-utils", version = "0.5.10", path = "libs/modkit-utils" }
 
 cf-system-sdks = { version = "0.1.29", path = "libs/system-sdks" }

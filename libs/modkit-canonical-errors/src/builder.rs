@@ -10,31 +10,47 @@ use crate::error::CanonicalError;
 // Resource markers
 // ---------------------------------------------------------------------------
 
+#[doc(hidden)]
 pub struct ResourceAbsent;
+#[doc(hidden)]
 pub struct ResourceOptional;
+#[doc(hidden)]
 pub struct ResourceMissing;
+#[doc(hidden)]
 pub struct ResourceSet(String);
 
 // ---------------------------------------------------------------------------
 // Context markers
 // ---------------------------------------------------------------------------
 
+#[doc(hidden)]
 pub struct NoContext;
+#[doc(hidden)]
 pub struct NeedsFieldViolation;
+#[doc(hidden)]
 pub struct HasFieldViolations(Vec<FieldViolation>);
+#[doc(hidden)]
 pub struct NeedsPreconditionViolation;
+#[doc(hidden)]
 pub struct HasPreconditionViolations(Vec<PreconditionViolation>);
+#[doc(hidden)]
 pub struct NeedsQuotaViolation;
+#[doc(hidden)]
 pub struct HasQuotaViolations(Vec<QuotaViolation>);
+#[doc(hidden)]
 pub struct HasFormatMessage(String);
+#[doc(hidden)]
 pub struct HasConstraintMessage(String);
+#[doc(hidden)]
 pub struct NeedsReason;
+#[doc(hidden)]
 pub struct HasReason;
 
 // ---------------------------------------------------------------------------
 // Traits gating build()
 // ---------------------------------------------------------------------------
 
+#[doc(hidden)]
 pub trait ResourceResolved {
     fn resolve(self) -> Option<String>;
 }
@@ -57,6 +73,7 @@ impl ResourceResolved for ResourceSet {
     }
 }
 
+#[doc(hidden)]
 pub struct ContextData {
     pub field_violations: Vec<FieldViolation>,
     pub precondition_violations: Vec<PreconditionViolation>,
@@ -65,6 +82,7 @@ pub struct ContextData {
     pub constraint_message: Option<String>,
 }
 
+#[doc(hidden)]
 pub trait ContextResolved {
     fn into_context_data(self) -> ContextData;
 }
@@ -623,17 +641,10 @@ where
     pub fn create(self) -> CanonicalError {
         let resource_name = self.resource.resolve();
         let ctx_data = self.context.into_context_data();
-        let rt = self.resource_type.unwrap_or("");
 
         let err = match self.variant {
-            ErrorVariant::NotFound => {
-                let rn = resource_name.as_deref().unwrap_or("");
-                CanonicalError::__not_found(NotFound::new(rt, rn))
-            }
-            ErrorVariant::AlreadyExists => {
-                let rn = resource_name.as_deref().unwrap_or("");
-                CanonicalError::__already_exists(AlreadyExists::new(rt, rn))
-            }
+            ErrorVariant::NotFound => CanonicalError::__not_found(NotFound::new()),
+            ErrorVariant::AlreadyExists => CanonicalError::__already_exists(AlreadyExists::new()),
             ErrorVariant::Aborted => {
                 CanonicalError::__aborted(Aborted::new(self.reason.as_deref().unwrap_or("")))
             }
@@ -666,10 +677,7 @@ where
             ErrorVariant::Cancelled => CanonicalError::__cancelled(Cancelled::new()),
             ErrorVariant::Unimplemented => CanonicalError::__unimplemented(Unimplemented::new()),
             ErrorVariant::Internal => CanonicalError::__internal(Internal::new(&self.detail)),
-            ErrorVariant::DataLoss => {
-                let rn = resource_name.as_deref().unwrap_or("");
-                CanonicalError::__data_loss(DataLoss::new(rt, rn))
-            }
+            ErrorVariant::DataLoss => CanonicalError::__data_loss(DataLoss::new()),
             ErrorVariant::Unauthenticated => {
                 let mut ctx = Unauthenticated::new();
                 if let Some(reason) = self.reason {

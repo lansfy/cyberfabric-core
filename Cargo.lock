@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "cf-modkit-canonical-errors"
-version = "0.5.8"
+version = "0.5.10"
 dependencies = [
  "gts-id",
  "sea-orm",

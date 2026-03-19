@@ -5,13 +5,13 @@ use serde::Serialize;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-pub struct FieldViolation {
+pub struct FieldViolationV1 {
     pub field: String,
     pub description: String,
     pub reason: String,
 }
 
-impl FieldViolation {
+impl FieldViolationV1 {
     #[must_use]
     pub fn new(
         field: impl Into<String>,
@@ -26,13 +26,15 @@ impl FieldViolation {
     }
 }
 
+pub type FieldViolation = FieldViolationV1;
+
 #[derive(Debug, Clone, Serialize)]
-pub struct QuotaViolation {
+pub struct QuotaViolationV1 {
     pub subject: String,
     pub description: String,
 }
 
-impl QuotaViolation {
+impl QuotaViolationV1 {
     #[must_use]
     pub fn new(subject: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
@@ -42,15 +44,17 @@ impl QuotaViolation {
     }
 }
 
+pub type QuotaViolation = QuotaViolationV1;
+
 #[derive(Debug, Clone, Serialize)]
-pub struct PreconditionViolation {
+pub struct PreconditionViolationV1 {
     #[serde(rename = "type")]
     pub type_: String,
     pub subject: String,
     pub description: String,
 }
 
-impl PreconditionViolation {
+impl PreconditionViolationV1 {
     #[must_use]
     pub fn new(
         type_: impl Into<String>,
@@ -65,6 +69,8 @@ impl PreconditionViolation {
     }
 }
 
+pub type PreconditionViolation = PreconditionViolationV1;
+
 // ---------------------------------------------------------------------------
 // Per-category context types
 // ---------------------------------------------------------------------------
@@ -72,29 +78,31 @@ impl PreconditionViolation {
 // 01 Cancelled — context: Cancelled
 #[derive(Debug, Clone, Serialize)]
 #[allow(clippy::empty_structs_with_brackets)]
-pub struct Cancelled {}
+pub struct CancelledV1 {}
 
-impl Cancelled {
+impl CancelledV1 {
     #[must_use]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl Default for Cancelled {
+impl Default for CancelledV1 {
     fn default() -> Self {
         Self::new()
     }
 }
 
+pub type Cancelled = CancelledV1;
+
 // 02 Unknown — context: Unknown
 #[derive(Debug, Clone, Serialize)]
-pub struct Unknown {
+pub struct UnknownV1 {
     #[serde(skip)]
     pub description: String,
 }
 
-impl Unknown {
+impl UnknownV1 {
     #[must_use]
     pub fn new(description: impl Into<String>) -> Self {
         Self {
@@ -103,10 +111,12 @@ impl Unknown {
     }
 }
 
+pub type Unknown = UnknownV1;
+
 // 03 InvalidArgument — context: InvalidArgument (enum with 3 variants)
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-pub enum InvalidArgument {
+pub enum InvalidArgumentV1 {
     FieldViolations {
         field_violations: Vec<FieldViolation>,
     },
@@ -118,7 +128,7 @@ pub enum InvalidArgument {
     },
 }
 
-impl InvalidArgument {
+impl InvalidArgumentV1 {
     #[must_use]
     pub fn fields(violations: impl Into<Vec<FieldViolation>>) -> Self {
         Self::FieldViolations {
@@ -139,65 +149,75 @@ impl InvalidArgument {
     }
 }
 
+pub type InvalidArgument = InvalidArgumentV1;
+
 // 04 DeadlineExceeded — context: DeadlineExceeded
 #[derive(Debug, Clone, Serialize)]
 #[allow(clippy::empty_structs_with_brackets)]
-pub struct DeadlineExceeded {}
+pub struct DeadlineExceededV1 {}
 
-impl DeadlineExceeded {
+impl DeadlineExceededV1 {
     #[must_use]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl Default for DeadlineExceeded {
+impl Default for DeadlineExceededV1 {
     fn default() -> Self {
         Self::new()
     }
 }
 
+pub type DeadlineExceeded = DeadlineExceededV1;
+
 // 05 NotFound — context: NotFound
 #[derive(Debug, Clone, Serialize)]
-pub struct NotFound {
-    pub resource_type: String,
-    pub resource_name: String,
-}
+#[allow(clippy::empty_structs_with_brackets)]
+pub struct NotFoundV1 {}
 
-impl NotFound {
+impl NotFoundV1 {
     #[must_use]
-    pub fn new(resource_type: impl Into<String>, resource_name: impl Into<String>) -> Self {
-        Self {
-            resource_type: resource_type.into(),
-            resource_name: resource_name.into(),
-        }
+    pub fn new() -> Self {
+        Self {}
     }
 }
+
+impl Default for NotFoundV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type NotFound = NotFoundV1;
 
 // 06 AlreadyExists — context: AlreadyExists
 #[derive(Debug, Clone, Serialize)]
-pub struct AlreadyExists {
-    pub resource_type: String,
-    pub resource_name: String,
-}
+#[allow(clippy::empty_structs_with_brackets)]
+pub struct AlreadyExistsV1 {}
 
-impl AlreadyExists {
+impl AlreadyExistsV1 {
     #[must_use]
-    pub fn new(resource_type: impl Into<String>, resource_name: impl Into<String>) -> Self {
-        Self {
-            resource_type: resource_type.into(),
-            resource_name: resource_name.into(),
-        }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
+impl Default for AlreadyExistsV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type AlreadyExists = AlreadyExistsV1;
+
 // 07 PermissionDenied — context: PermissionDenied
 #[derive(Debug, Clone, Serialize)]
-pub struct PermissionDenied {
+pub struct PermissionDeniedV1 {
     pub reason: String,
 }
 
-impl PermissionDenied {
+impl PermissionDeniedV1 {
     #[must_use]
     pub fn new(reason: impl Into<String>) -> Self {
         Self {
@@ -206,13 +226,15 @@ impl PermissionDenied {
     }
 }
 
+pub type PermissionDenied = PermissionDeniedV1;
+
 // 08 ResourceExhausted — context: ResourceExhausted
 #[derive(Debug, Clone, Serialize)]
-pub struct ResourceExhausted {
+pub struct ResourceExhaustedV1 {
     pub violations: Vec<QuotaViolation>,
 }
 
-impl ResourceExhausted {
+impl ResourceExhaustedV1 {
     #[must_use]
     pub fn new(violations: impl Into<Vec<QuotaViolation>>) -> Self {
         Self {
@@ -221,13 +243,15 @@ impl ResourceExhausted {
     }
 }
 
+pub type ResourceExhausted = ResourceExhaustedV1;
+
 // 09 FailedPrecondition — context: FailedPrecondition
 #[derive(Debug, Clone, Serialize)]
-pub struct FailedPrecondition {
+pub struct FailedPreconditionV1 {
     pub violations: Vec<PreconditionViolation>,
 }
 
-impl FailedPrecondition {
+impl FailedPreconditionV1 {
     #[must_use]
     pub fn new(violations: impl Into<Vec<PreconditionViolation>>) -> Self {
         Self {
@@ -236,13 +260,15 @@ impl FailedPrecondition {
     }
 }
 
+pub type FailedPrecondition = FailedPreconditionV1;
+
 // 10 Aborted — context: Aborted
 #[derive(Debug, Clone, Serialize)]
-pub struct Aborted {
+pub struct AbortedV1 {
     pub reason: String,
 }
 
-impl Aborted {
+impl AbortedV1 {
     #[must_use]
     pub fn new(reason: impl Into<String>) -> Self {
         Self {
@@ -251,13 +277,15 @@ impl Aborted {
     }
 }
 
+pub type Aborted = AbortedV1;
+
 // 11 OutOfRange — context: OutOfRange
 #[derive(Debug, Clone, Serialize)]
-pub struct OutOfRange {
+pub struct OutOfRangeV1 {
     pub field_violations: Vec<FieldViolation>,
 }
 
-impl OutOfRange {
+impl OutOfRangeV1 {
     #[must_use]
     pub fn new(violations: impl Into<Vec<FieldViolation>>) -> Self {
         Self {
@@ -266,32 +294,36 @@ impl OutOfRange {
     }
 }
 
+pub type OutOfRange = OutOfRangeV1;
+
 // 12 Unimplemented — context: Unimplemented
 #[derive(Debug, Clone, Serialize)]
 #[allow(clippy::empty_structs_with_brackets)]
-pub struct Unimplemented {}
+pub struct UnimplementedV1 {}
 
-impl Unimplemented {
+impl UnimplementedV1 {
     #[must_use]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl Default for Unimplemented {
+impl Default for UnimplementedV1 {
     fn default() -> Self {
         Self::new()
     }
 }
 
+pub type Unimplemented = UnimplementedV1;
+
 // 13 Internal — context: Internal
 #[derive(Debug, Clone, Serialize)]
-pub struct Internal {
+pub struct InternalV1 {
     #[serde(skip)]
     pub description: String,
 }
 
-impl Internal {
+impl InternalV1 {
     #[must_use]
     pub fn new(description: impl Into<String>) -> Self {
         Self {
@@ -300,13 +332,15 @@ impl Internal {
     }
 }
 
+pub type Internal = InternalV1;
+
 // 14 ServiceUnavailable — context: ServiceUnavailable
 #[derive(Debug, Clone, Serialize)]
-pub struct ServiceUnavailable {
+pub struct ServiceUnavailableV1 {
     pub retry_after_seconds: u64,
 }
 
-impl ServiceUnavailable {
+impl ServiceUnavailableV1 {
     #[must_use]
     pub fn new(retry_after_seconds: u64) -> Self {
         Self {
@@ -315,31 +349,36 @@ impl ServiceUnavailable {
     }
 }
 
+pub type ServiceUnavailable = ServiceUnavailableV1;
+
 // 15 DataLoss — context: DataLoss
 #[derive(Debug, Clone, Serialize)]
-pub struct DataLoss {
-    pub resource_type: String,
-    pub resource_name: String,
-}
+#[allow(clippy::empty_structs_with_brackets)]
+pub struct DataLossV1 {}
 
-impl DataLoss {
+impl DataLossV1 {
     #[must_use]
-    pub fn new(resource_type: impl Into<String>, resource_name: impl Into<String>) -> Self {
-        Self {
-            resource_type: resource_type.into(),
-            resource_name: resource_name.into(),
-        }
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
+impl Default for DataLossV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type DataLoss = DataLossV1;
+
 // 16 Unauthenticated — context: Unauthenticated
 #[derive(Debug, Clone, Serialize)]
-pub struct Unauthenticated {
+pub struct UnauthenticatedV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
-impl Unauthenticated {
+impl UnauthenticatedV1 {
     #[must_use]
     pub fn new() -> Self {
         Self { reason: None }
@@ -352,8 +391,10 @@ impl Unauthenticated {
     }
 }
 
-impl Default for Unauthenticated {
+impl Default for UnauthenticatedV1 {
     fn default() -> Self {
         Self::new()
     }
 }
+
+pub type Unauthenticated = UnauthenticatedV1;

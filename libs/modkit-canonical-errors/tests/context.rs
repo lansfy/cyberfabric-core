@@ -1,6 +1,6 @@
-extern crate cf_modkit_errors;
+extern crate modkit_canonical_errors;
 
-use cf_modkit_errors::{
+use modkit_canonical_errors::{
     Aborted, AlreadyExists, Cancelled, DataLoss, DeadlineExceeded, FailedPrecondition,
     FieldViolation, Internal, InvalidArgument, NotFound, OutOfRange, PermissionDenied,
     PreconditionViolation, QuotaViolation, ResourceExhausted, ServiceUnavailable, Unauthenticated,
@@ -90,18 +90,16 @@ fn deadline_exceeded_serialization() {
 
 #[test]
 fn not_found_serialization() {
-    let ctx = NotFound::new("gts.cf.core.users.user.v1~", "user-123");
+    let ctx = NotFound::new();
     let json = serde_json::to_value(&ctx).unwrap();
-    assert_eq!(json["resource_type"], "gts.cf.core.users.user.v1~");
-    assert_eq!(json["resource_name"], "user-123");
+    assert!(json.is_object());
 }
 
 #[test]
 fn already_exists_serialization() {
-    let ctx = AlreadyExists::new("gts.cf.core.users.user.v1~", "alice@example.com");
+    let ctx = AlreadyExists::new();
     let json = serde_json::to_value(&ctx).unwrap();
-    assert_eq!(json["resource_type"], "gts.cf.core.users.user.v1~");
-    assert_eq!(json["resource_name"], "alice@example.com");
+    assert!(json.is_object());
 }
 
 #[test]
@@ -170,10 +168,9 @@ fn service_unavailable_serialization() {
 
 #[test]
 fn data_loss_serialization() {
-    let ctx = DataLoss::new("gts.cf.core.files.file.v1~", "file-abc");
+    let ctx = DataLoss::new();
     let json = serde_json::to_value(&ctx).unwrap();
-    assert_eq!(json["resource_type"], "gts.cf.core.files.file.v1~");
-    assert_eq!(json["resource_name"], "file-abc");
+    assert!(json.is_object());
 }
 
 #[test]
