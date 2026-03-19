@@ -62,14 +62,14 @@ fn diagnostic_returns_description_for_internal() {
 
 #[test]
 fn diagnostic_returns_description_for_unknown() {
-    cf_modkit_errors::resource_error!(R, "gts.cf.test.v1~");
+    cf_modkit_errors::resource_error!(R, "gts.cf.core.test.resource.v1~");
     let err = R::unknown("unexpected upstream response").create();
     assert_eq!(err.diagnostic(), Some("unexpected upstream response"));
 }
 
 #[test]
 fn diagnostic_returns_none_for_other_categories() {
-    cf_modkit_errors::resource_error!(R, "gts.cf.test.v1~");
+    cf_modkit_errors::resource_error!(R, "gts.cf.core.test.resource.v1~");
     let err = R::not_found("gone").with_resource("x").create();
     assert_eq!(err.diagnostic(), None);
 }
@@ -87,7 +87,7 @@ fn from_error_debug_includes_description_for_internal() {
 
 #[test]
 fn from_error_debug_includes_description_for_unknown() {
-    cf_modkit_errors::resource_error!(R, "gts.cf.test.v1~");
+    cf_modkit_errors::resource_error!(R, "gts.cf.core.test.resource.v1~");
     let err = R::unknown("unexpected upstream response").create();
     let problem = Problem::from_error_debug(&err);
     assert_eq!(
@@ -105,7 +105,7 @@ fn from_error_does_not_include_description_for_internal() {
 
 #[test]
 fn from_error_does_not_include_description_for_unknown() {
-    cf_modkit_errors::resource_error!(R, "gts.cf.test.v1~");
+    cf_modkit_errors::resource_error!(R, "gts.cf.core.test.resource.v1~");
     let err = R::unknown("unexpected upstream response").create();
     let problem = Problem::from_error(&err);
     assert!(problem.context.get("description").is_none());
@@ -113,7 +113,7 @@ fn from_error_does_not_include_description_for_unknown() {
 
 #[test]
 fn from_error_debug_no_op_for_other_categories() {
-    cf_modkit_errors::resource_error!(R, "gts.cf.test.v1~");
+    cf_modkit_errors::resource_error!(R, "gts.cf.core.test.resource.v1~");
     let err = R::not_found("gone").with_resource("x").create();
     let normal = Problem::from_error(&err);
     let debug = Problem::from_error_debug(&err);

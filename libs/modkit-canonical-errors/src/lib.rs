@@ -3,7 +3,11 @@ extern crate self as cf_modkit_errors;
 pub mod builder;
 pub mod context;
 pub mod error;
+mod gts_validation;
 pub mod problem;
+
+#[doc(hidden)]
+pub use gts_validation::validate_gts_resource_type;
 
 pub use builder::{ResourceErrorBuilder, ServiceUnavailableBuilder};
 pub use context::{
@@ -43,6 +47,8 @@ pub use problem::Problem;
 #[macro_export]
 macro_rules! resource_error {
     ($vis:vis $name:ident, $gts_type:literal) => {
+        const _: () = $crate::validate_gts_resource_type($gts_type);
+
         $vis struct $name;
 
         impl $name {
