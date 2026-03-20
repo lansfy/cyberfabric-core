@@ -65,7 +65,7 @@
 
 ### Versioning
 
-- [ ] When editing existing UPSTREAM_REQS: increment version in frontmatter
+- [ ] When editing existing UPSTREAM_REQS that has frontmatter: increment version in frontmatter
 - [ ] Keep changelog of significant changes
 
 ### Semantic
