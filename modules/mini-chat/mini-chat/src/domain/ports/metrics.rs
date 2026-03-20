@@ -140,6 +140,9 @@ pub trait MiniChatMetricsPort: Send + Sync {
     /// `{prefix}_attachments_pending` — gauge increment/decrement
     fn increment_attachments_pending(&self);
     fn decrement_attachments_pending(&self);
+
+    /// `{prefix}_image_inputs_per_turn` — histogram
+    fn record_image_inputs_per_turn(&self, count: u32);
 }
 
 /// No-op implementation for use in tests or when metrics are disabled.
@@ -176,4 +179,5 @@ impl MiniChatMetricsPort for NoopMetrics {
     fn record_attachment_upload_bytes(&self, _: &str, _: f64) {}
     fn increment_attachments_pending(&self) {}
     fn decrement_attachments_pending(&self) {}
+    fn record_image_inputs_per_turn(&self, _: u32) {}
 }

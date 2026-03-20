@@ -263,6 +263,7 @@ impl<
                 Arc::clone(&repos.vector_store),
                 Arc::clone(&repos.message_attachment),
                 context_config,
+                rag_config.clone(),
                 Arc::clone(&metrics),
             ),
             turns,

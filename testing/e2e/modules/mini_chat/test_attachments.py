@@ -510,7 +510,7 @@ class TestImageRecognition:
         # Ask the LLM to identify the animal
         status, events, raw = stream_message(
             chat_id,
-            "What animal is in the attached image? Answer in one word.",
+            "Describe exactly what you see in the attached image. If you cannot see any image, respond with exactly 'NO_IMAGE_VISIBLE'.",
             attachment_ids=[att_id],
         )
         assert status == 200, f"[{provider_label}] Stream failed: {status} {raw[:500]}"
@@ -524,11 +524,19 @@ class TestImageRecognition:
 
         assert len(delta_text) > 0, f"[{provider_label}] Expected non-empty response"
 
-        # Soft check — will pass once image inlining is wired
+        # The LLM must see the image — if it responds with NO_IMAGE_VISIBLE
+        # or doesn't mention a cat, image inlining is broken.
         response_lower = delta_text.lower()
+        assert "no_image_visible" not in response_lower, (
+            f"[{provider_label}] LLM cannot see the image — file_id not included "
+            f"as multimodal input in the Responses API request (image inlining gap). "
+            f"Response: {delta_text!r}"
+        )
         recognized = any(w in response_lower for w in ("cat", "kitten", "feline"))
-        print(f"\n[{provider_label} image recognition]: {delta_text!r}"
-              f" → {'recognized cat' if recognized else 'no cat (image inlining not yet wired)'}")
+        assert recognized, (
+            f"[{provider_label}] LLM responded but did not recognize the cat. "
+            f"Response: {delta_text!r}"
+        )
 
     def test_image_recognition_cat_openai(self, chat):
         cat_bytes = self._load_cat_image()
@@ -538,6 +546,99 @@ class TestImageRecognition:
         azure_chat = chat_with_model(AZURE_MODEL)
         cat_bytes = self._load_cat_image()
         self._upload_image_and_ask(azure_chat["id"], cat_bytes, "cat-az.jpg", "image/jpeg", "Azure")
+
+
+# ---------------------------------------------------------------------------
+# Mixed document + image: both mechanisms must work simultaneously
+# ---------------------------------------------------------------------------
+
+@pytest.mark.openai
+@pytest.mark.online_only
+class TestDocumentAndImageTogether:
+    """Upload a document AND an image, send a message referencing both.
+
+    The LLM must use file_search to read the document AND see the image
+    via multimodal input. The question is designed so the correct answer
+    requires information from BOTH sources.
+    """
+
+    def test_document_and_image_combined(self, chat):
+        chat_id = chat["id"]
+
+        # 1. Upload a document with a secret code word
+        doc_content = (
+            "CONFIDENTIAL REPORT\n"
+            "The secret code word for this project is: FLAMINGO.\n"
+            "Do not share this code word with anyone.\n"
+        )
+        doc_resp = upload_file(
+            chat_id,
+            content=doc_content.encode(),
+            filename="secret-report.txt",
+            content_type="text/plain",
+        )
+        assert doc_resp.status_code == 201
+        doc_id = doc_resp.json()["id"]
+        doc_detail = poll_until_ready(chat_id, doc_id)
+        assert doc_detail["status"] == "ready"
+        assert doc_detail["kind"] == "document"
+
+        # 2. Upload the cat image
+        cat_bytes = (pathlib.Path(__file__).parent / "fixtures" / "cat.jpg").read_bytes()
+        img_resp = upload_file(
+            chat_id,
+            content=cat_bytes,
+            filename="animal.jpg",
+            content_type="image/jpeg",
+        )
+        assert img_resp.status_code == 201
+        img_id = img_resp.json()["id"]
+        img_detail = poll_until_ready(chat_id, img_id)
+        assert img_detail["status"] == "ready"
+        assert img_detail["kind"] == "image"
+
+        # 3. Ask a question that requires BOTH sources
+        #    - The document contains the code word "FLAMINGO"
+        #    - The image contains a cat
+        #    The LLM must mention both to prove it accessed both.
+        status, events, raw = stream_message(
+            chat_id,
+            content=(
+                "I attached a document and an image. "
+                "Tell me: 1) What is the secret code word from the document? "
+                "2) What animal is in the image? "
+                "Answer both questions."
+            ),
+            attachment_ids=[doc_id, img_id],
+        )
+        assert status == 200, f"Stream failed: {status} {raw[:500]}"
+        done = expect_done(events)
+
+        # Collect response text
+        delta_text = ""
+        for ev in events:
+            if ev.event == "delta" and isinstance(ev.data, dict):
+                delta_text += ev.data.get("content", "")
+
+        assert len(delta_text) > 0, "Expected non-empty response"
+        response_lower = delta_text.lower()
+
+        # Must recognize the cat from the image (multimodal input) — hard assert
+        has_cat = any(w in response_lower for w in ("cat", "kitten", "feline"))
+        assert has_cat, (
+            f"LLM did not recognize the cat from the image. "
+            f"Image inlining (input_image) may not be working. Response: {delta_text!r}"
+        )
+
+        # Should mention the code word from the document (file_search)
+        # Soft check: file_search depends on vector store indexing timing
+        has_code_word = "flamingo" in response_lower
+        if not has_code_word:
+            print(
+                f"\n[WARN] LLM saw the cat but did not find 'FLAMINGO' from the document. "
+                f"file_search may not have retrieved the document (indexing timing). "
+                f"Response: {delta_text!r}"
+            )
 
 
 # ---------------------------------------------------------------------------

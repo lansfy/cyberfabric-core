@@ -154,6 +154,12 @@ pub enum StreamError {
     },
     /// Web search is disabled via kill switch but was requested.
     WebSearchDisabled,
+    /// Images are disabled via kill switch but image attachments were included.
+    ImagesDisabled,
+    /// Too many image attachments in one message (`max_images_per_message` exceeded).
+    TooManyImages { count: u32, max: u32 },
+    /// Model does not support image input (missing `VISION_INPUT` capability).
+    UnsupportedMedia,
     /// One or more attachment IDs are invalid (not found, wrong status, wrong chat, etc.).
     InvalidAttachment { code: String, message: String },
     /// Context budget exceeded — mandatory items don't fit in the token budget.
@@ -458,6 +464,7 @@ pub struct StreamService<
     vector_store_repo: Arc<VSR>,
     message_attachment_repo: Arc<MAR>,
     context_config: ContextConfig,
+    rag_config: crate::config::RagConfig,
     metrics: Arc<dyn MiniChatMetricsPort>,
 }
 
@@ -490,6 +497,7 @@ impl<
         vector_store_repo: Arc<VSR>,
         message_attachment_repo: Arc<MAR>,
         context_config: ContextConfig,
+        rag_config: crate::config::RagConfig,
         metrics: Arc<dyn MiniChatMetricsPort>,
     ) -> Self {
         Self {
@@ -507,6 +515,7 @@ impl<
             vector_store_repo,
             message_attachment_repo,
             context_config,
+            rag_config,
             metrics,
         }
     }
@@ -571,6 +580,10 @@ impl<
         cancel: CancellationToken,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Result<tokio::task::JoinHandle<StreamOutcome>, StreamError> {
+        let has_vision_input = resolved_model
+            .multimodal_capabilities
+            .iter()
+            .any(|c| c == "VISION_INPUT");
         let ResolvedModel {
             model_id: model,
             provider_id,
@@ -658,6 +671,39 @@ impl<
             .await
             .map_err(|e| StreamError::TurnCreationFailed { source: e })?;
 
+        // ── Pre-fetch image attachment count for guards + token estimation ──
+        // Validates chat_id to prevent cross-chat attachment references.
+        let image_file_ids: Vec<String> = if attachment_ids.is_empty() {
+            Vec::new()
+        } else {
+            let rows = self
+                .attachment_repo
+                .get_batch(&conn, &scope, &attachment_ids)
+                .await
+                .map_err(|e| StreamError::TurnCreationFailed { source: e })?;
+            rows.iter()
+                .filter(|r| {
+                    r.chat_id == chat_id
+                        && r.attachment_kind
+                            == crate::infra::db::entity::attachment::AttachmentKind::Image
+                        && r.status == crate::infra::db::entity::attachment::AttachmentStatus::Ready
+                })
+                .filter_map(|r| r.provider_file_id.clone())
+                .collect()
+        };
+        let num_images = u32::try_from(image_file_ids.len()).unwrap_or(u32::MAX);
+
+        // ── Image count guard (before preflight, before TX) ──
+        if num_images > 0 {
+            let max = self.rag_config.max_images_per_message;
+            if num_images > max {
+                return Err(StreamError::TooManyImages {
+                    count: num_images,
+                    max,
+                });
+            }
+        }
+
         // ── Preflight quota evaluate (external I/O, no DB writes) ──
         let selected_model = model.clone();
         let computed = self
@@ -667,7 +713,7 @@ impl<
                 user_id,
                 selected_model: selected_model.clone(),
                 utf8_bytes: content.len() as u64,
-                num_images: 0,
+                num_images,
                 tools_enabled: pre_ready_doc_count > 0,
                 web_search_enabled,
                 code_interpreter_enabled: !pre_ci_file_ids.is_empty(),
@@ -683,6 +729,22 @@ impl<
         self.record_preflight_metrics(&computed, &selected_model);
 
         let pf = flatten_preflight(computed.decision.clone())?;
+
+        // ── Post-preflight image guards (kill switches + vision capability) ──
+        if num_images > 0 {
+            if computed.kill_switches.disable_images {
+                return Err(StreamError::ImagesDisabled);
+            }
+            // DESIGN.md line 181: check VISION_INPUT on the effective_model.
+            // DESIGN.md line 3206: P1 catalog invariant — ALL enabled models
+            // MUST include VISION_INPUT (enforced at startup). Under a valid
+            // P1 config, quota downgrade cannot demote to a non-vision model,
+            // so checking the selected_model is sufficient. This guard is
+            // defensive for future non-vision models or catalog misconfiguration.
+            if !has_vision_input {
+                return Err(StreamError::UnsupportedMedia);
+            }
+        }
 
         // Metrics: estimated tokens (only on allow/downgrade)
         #[allow(clippy::cast_precision_loss)]
@@ -833,9 +895,14 @@ impl<
                 pf.max_retrieved_chunks_per_turn,
                 ci_file_ids,
                 token_budget,
+                &image_file_ids,
             )
             .await?;
 
+        // Record image metrics
+        if num_images > 0 {
+            self.metrics.record_image_inputs_per_turn(num_images);
+        }
         let tenant_id_str = tenant_id.to_string();
         let resolved_provider = self
             .provider_resolver
@@ -1105,6 +1172,7 @@ impl<
         file_search_max_num_results: u32,
         code_interpreter_file_ids: Vec<String>,
         token_budget: Option<super::context_assembly::TokenBudget>,
+        image_file_ids: &[String],
     ) -> Result<super::context_assembly::AssembledContext, StreamError> {
         let conn = self
             .db
@@ -1182,6 +1250,7 @@ impl<
             file_search_max_num_results,
             code_interpreter_file_ids,
             token_budget,
+            image_file_ids,
         })
         .map_err(|e| StreamError::ContextBudgetExceeded {
             required_tokens: match &e {
@@ -1439,6 +1508,7 @@ impl<
                 pf.max_retrieved_chunks_per_turn,
                 ci_file_ids,
                 token_budget,
+                &[], // retry/edit: no new image attachments
             )
             .await?;
 
@@ -2942,6 +3012,7 @@ mod tests {
             Arc::new(crate::infra::db::repo::vector_store_repo::VectorStoreRepository),
             Arc::new(crate::infra::db::repo::message_attachment_repo::MessageAttachmentRepository),
             crate::config::ContextConfig::default(),
+            crate::config::RagConfig::default(),
             metrics,
         )
     }
@@ -3925,6 +3996,7 @@ mod tests {
             Arc::new(crate::infra::db::repo::vector_store_repo::VectorStoreRepository),
             Arc::new(crate::infra::db::repo::message_attachment_repo::MessageAttachmentRepository),
             crate::config::ContextConfig::default(),
+            crate::config::RagConfig::default(),
             Arc::new(crate::domain::ports::metrics::NoopMetrics),
         )
     }
@@ -5353,6 +5425,7 @@ mod tests {
             Arc::new(crate::infra::db::repo::vector_store_repo::VectorStoreRepository),
             Arc::new(crate::infra::db::repo::message_attachment_repo::MessageAttachmentRepository),
             crate::config::ContextConfig::default(),
+            crate::config::RagConfig::default(),
             Arc::new(crate::domain::ports::metrics::NoopMetrics),
         )
     }
@@ -5660,6 +5733,7 @@ mod tests {
         fn record_attachment_upload_bytes(&self, _: &str, _: f64) {}
         fn increment_attachments_pending(&self) {}
         fn decrement_attachments_pending(&self) {}
+        fn record_image_inputs_per_turn(&self, _: u32) {}
     }
 
     // ── Metric emission tests ────────────────────────────────────────────

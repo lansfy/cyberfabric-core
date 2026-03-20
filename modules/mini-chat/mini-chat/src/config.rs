@@ -709,6 +709,14 @@ pub struct RagConfig {
     /// Accept `text/csv` uploads remapped to `text/plain` for `file_search`.
     #[serde(default = "default_true")]
     pub allow_csv_upload: bool,
+
+    /// Maximum number of image attachments per message (DESIGN.md B.8).
+    #[serde(default = "default_max_images_per_message")]
+    pub max_images_per_message: u32,
+}
+
+fn default_max_images_per_message() -> u32 {
+    4
 }
 
 impl Default for RagConfig {
@@ -719,6 +727,7 @@ impl Default for RagConfig {
             uploaded_file_max_size_kb: default_uploaded_file_max_size_kb(),
             uploaded_image_max_size_kb: default_uploaded_image_max_size_kb(),
             allow_csv_upload: true,
+            max_images_per_message: default_max_images_per_message(),
         }
     }
 }
@@ -736,6 +745,9 @@ impl RagConfig {
         }
         if self.uploaded_image_max_size_kb == 0 {
             return Err("rag uploaded_image_max_size_kb must be > 0".into());
+        }
+        if self.max_images_per_message == 0 {
+            return Err("rag max_images_per_message must be > 0".into());
         }
         Ok(())
     }

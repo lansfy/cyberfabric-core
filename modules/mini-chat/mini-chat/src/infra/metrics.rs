@@ -791,6 +791,10 @@ impl MiniChatMetricsPort for MiniChatMetricsMeter {
     fn decrement_attachments_pending(&self) {
         self.attachments_pending.add(-1, &[]);
     }
+
+    fn record_image_inputs_per_turn(&self, count: u32) {
+        self.image_inputs_per_turn.record(f64::from(count), &[]);
+    }
 }
 
 #[cfg(test)]

@@ -1164,6 +1164,7 @@ impl crate::domain::ports::MiniChatMetricsPort for TestMetrics {
     fn decrement_attachments_pending(&self) {
         self.attachments_pending.fetch_add(-1, Ordering::Relaxed);
     }
+    fn record_image_inputs_per_turn(&self, _count: u32) {}
 }
 
 // ── Mock User Limits Provider ──

@@ -6,7 +6,9 @@
 use modkit_macros::domain_model;
 
 use crate::config::EstimationBudgets;
-use crate::domain::llm::{ContextMessage, FileSearchFilter, LlmMessage, LlmTool, Role};
+use crate::domain::llm::{
+    ContentPart, ContextMessage, FileSearchFilter, LlmMessage, LlmTool, Role,
+};
 
 /// Token budget parameters for context truncation.
 ///
@@ -63,6 +65,8 @@ pub struct ContextInput<'a> {
     pub code_interpreter_file_ids: Vec<String>,
     /// Token budget for context truncation. `None` = no truncation.
     pub token_budget: Option<TokenBudget>,
+    /// Provider file IDs for image attachments on the current user message.
+    pub image_file_ids: &'a [String],
 }
 
 /// Output of context assembly — ready to feed into `LlmRequestBuilder`.
@@ -103,6 +107,26 @@ impl std::fmt::Display for ContextAssemblyError {
 }
 
 impl std::error::Error for ContextAssemblyError {}
+
+/// Build the current user message with optional image content parts.
+fn build_user_message(text: &str, image_file_ids: &[String]) -> LlmMessage {
+    if image_file_ids.is_empty() {
+        LlmMessage::user(text)
+    } else {
+        let mut content = vec![ContentPart::Text {
+            text: text.to_owned(),
+        }];
+        for file_id in image_file_ids {
+            content.push(ContentPart::Image {
+                file_id: file_id.clone(),
+            });
+        }
+        LlmMessage {
+            role: Role::User,
+            content,
+        }
+    }
+}
 
 /// Compute the available input token budget after deducting output reservation
 /// and tool surcharges.
@@ -205,8 +229,10 @@ pub fn assemble_context(
 
         // P2: Current user message (mandatory)
         let user_tokens = estimate_item_tokens(input.user_message.len() as u64, budgets);
+        let image_tokens = (input.image_file_ids.len() as u64)
+            .saturating_mul(u64::from(budgets.image_token_budget));
 
-        let mandatory = sys_tokens + user_tokens;
+        let mandatory = sys_tokens + user_tokens + image_tokens;
         if mandatory > available {
             return Err(ContextAssemblyError::BudgetExceeded {
                 required_tokens: mandatory,
@@ -260,7 +286,7 @@ pub fn assemble_context(
             }
         }
 
-        messages.push(LlmMessage::user(input.user_message));
+        messages.push(build_user_message(input.user_message, input.image_file_ids));
 
         Ok(AssembledContext {
             system_instructions,
@@ -283,7 +309,7 @@ pub fn assemble_context(
             }
         }
 
-        messages.push(LlmMessage::user(input.user_message));
+        messages.push(build_user_message(input.user_message, input.image_file_ids));
 
         Ok(AssembledContext {
             system_instructions,
@@ -350,6 +376,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         assert!(result.system_instructions.is_none());
@@ -375,6 +402,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         let instructions = result.system_instructions.unwrap();
@@ -400,6 +428,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         let instructions = result.system_instructions.unwrap();
@@ -425,6 +454,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         let instructions = result.system_instructions.unwrap();
@@ -452,6 +482,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         // First message should be the thread summary
@@ -490,6 +521,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         assert_eq!(result.messages.len(), 3); // 2 recent + current
@@ -518,6 +550,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         // system message skipped: 2 recent (user+assistant) + 1 current = 3
@@ -543,6 +576,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         let last = result.messages.last().unwrap();
@@ -575,6 +609,7 @@ mod tests {
             file_search_max_num_results: 7,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         assert_eq!(result.tools.len(), 2);
@@ -608,6 +643,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         assert!(result.tools.is_empty());
@@ -628,6 +664,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         assert_eq!(result.tools.len(), 1);
@@ -743,6 +780,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: Some(test_budget(context_window, 4096)),
+            image_file_ids: &[],
         })
         .unwrap();
 
@@ -782,6 +820,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: Some(test_budget(context_window, 4096)),
+            image_file_ids: &[],
         })
         .unwrap();
 
@@ -831,6 +870,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: Some(test_budget(context_window, 4096)),
+            image_file_ids: &[],
         })
         .unwrap();
 
@@ -857,6 +897,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: Some(test_budget(5000, 4096)),
+            image_file_ids: &[],
         });
 
         assert!(matches!(
@@ -888,6 +929,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
 
@@ -927,6 +969,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec!["file-abc123".to_owned()],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         assert_eq!(result.tools.len(), 1);
@@ -954,6 +997,7 @@ mod tests {
             file_search_max_num_results: 5,
             code_interpreter_file_ids: vec![],
             token_budget: None,
+            image_file_ids: &[],
         })
         .unwrap();
         assert!(result.tools.is_empty());
@@ -973,5 +1017,153 @@ mod tests {
         // available = 128_000 - 4096 - 1000 (code_interpreter) - 100 (overhead)
         let available = compute_available_budget(&budget).unwrap();
         assert_eq!(available, 128_000 - 4096 - 1000 - 100);
+    }
+
+    // ── Image inlining tests ──
+
+    #[test]
+    fn single_image_produces_image_content_part() {
+        let images = vec!["file-abc".to_owned()];
+        let result = assemble_context(&ContextInput {
+            system_prompt: "",
+            web_search_guard: "",
+            file_search_guard: "",
+            thread_summary: None,
+            recent_messages: &[],
+            user_message: "Describe this",
+            web_search_enabled: false,
+            file_search_enabled: false,
+            vector_store_ids: &[],
+            file_search_filters: None,
+            web_search_context_size: crate::domain::llm::WebSearchContextSize::Low,
+            file_search_max_num_results: 5,
+            code_interpreter_file_ids: vec![],
+            token_budget: None,
+            image_file_ids: &images,
+        })
+        .unwrap();
+        assert_eq!(result.messages.len(), 1);
+        let msg = &result.messages[0];
+        assert_eq!(msg.content.len(), 2);
+        assert!(matches!(&msg.content[0], ContentPart::Text { text } if text == "Describe this"));
+        assert!(matches!(&msg.content[1], ContentPart::Image { file_id } if file_id == "file-abc"));
+    }
+
+    #[test]
+    fn multiple_images_produce_multiple_content_parts() {
+        let images = vec!["file-1".to_owned(), "file-2".to_owned()];
+        let result = assemble_context(&ContextInput {
+            system_prompt: "",
+            web_search_guard: "",
+            file_search_guard: "",
+            thread_summary: None,
+            recent_messages: &[],
+            user_message: "Compare these",
+            web_search_enabled: false,
+            file_search_enabled: false,
+            vector_store_ids: &[],
+            file_search_filters: None,
+            web_search_context_size: crate::domain::llm::WebSearchContextSize::Low,
+            file_search_max_num_results: 5,
+            code_interpreter_file_ids: vec![],
+            token_budget: None,
+            image_file_ids: &images,
+        })
+        .unwrap();
+        let msg = &result.messages[0];
+        assert_eq!(msg.content.len(), 3);
+        assert!(matches!(&msg.content[1], ContentPart::Image { file_id } if file_id == "file-1"));
+        assert!(matches!(&msg.content[2], ContentPart::Image { file_id } if file_id == "file-2"));
+    }
+
+    #[test]
+    fn no_images_produces_text_only() {
+        let result = assemble_context(&ContextInput {
+            system_prompt: "",
+            web_search_guard: "",
+            file_search_guard: "",
+            thread_summary: None,
+            recent_messages: &[],
+            user_message: "hello",
+            web_search_enabled: false,
+            file_search_enabled: false,
+            vector_store_ids: &[],
+            file_search_filters: None,
+            web_search_context_size: crate::domain::llm::WebSearchContextSize::Low,
+            file_search_max_num_results: 5,
+            code_interpreter_file_ids: vec![],
+            token_budget: None,
+            image_file_ids: &[],
+        })
+        .unwrap();
+        let msg = &result.messages[0];
+        assert_eq!(msg.content.len(), 1);
+        assert!(matches!(&msg.content[0], ContentPart::Text { .. }));
+    }
+
+    #[test]
+    fn image_tokens_included_in_budget_mandatory() {
+        let images = vec!["file-1".to_owned(), "file-2".to_owned()];
+        let result = assemble_context(&ContextInput {
+            system_prompt: "",
+            web_search_guard: "",
+            file_search_guard: "",
+            thread_summary: None,
+            recent_messages: &[],
+            user_message: "hi",
+            web_search_enabled: false,
+            file_search_enabled: false,
+            vector_store_ids: &[],
+            file_search_filters: None,
+            web_search_context_size: crate::domain::llm::WebSearchContextSize::Low,
+            file_search_max_num_results: 5,
+            code_interpreter_file_ids: vec![],
+            token_budget: Some(test_budget(10_000, 4096)),
+            image_file_ids: &images,
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn image_tokens_cause_budget_exceeded() {
+        let images = vec!["file-1".to_owned(), "file-2".to_owned()];
+        let result = assemble_context(&ContextInput {
+            system_prompt: "",
+            web_search_guard: "",
+            file_search_guard: "",
+            thread_summary: None,
+            recent_messages: &[],
+            user_message: "hi",
+            web_search_enabled: false,
+            file_search_enabled: false,
+            vector_store_ids: &[],
+            file_search_filters: None,
+            web_search_context_size: crate::domain::llm::WebSearchContextSize::Low,
+            file_search_max_num_results: 5,
+            code_interpreter_file_ids: vec![],
+            token_budget: Some(test_budget(5100, 4096)),
+            image_file_ids: &images,
+        });
+        assert!(matches!(
+            result,
+            Err(ContextAssemblyError::BudgetExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn build_user_message_helper_text_only() {
+        let msg = super::build_user_message("hello", &[]);
+        assert_eq!(msg.content.len(), 1);
+        assert!(matches!(&msg.content[0], ContentPart::Text { text } if text == "hello"));
+    }
+
+    #[test]
+    fn build_user_message_helper_with_images() {
+        let ids = vec!["f1".to_owned(), "f2".to_owned()];
+        let msg = super::build_user_message("look", &ids);
+        assert_eq!(msg.content.len(), 3);
+        assert!(matches!(&msg.content[0], ContentPart::Text { text } if text == "look"));
+        assert!(matches!(&msg.content[1], ContentPart::Image { file_id } if file_id == "f1"));
+        assert!(matches!(&msg.content[2], ContentPart::Image { file_id } if file_id == "f2"));
     }
 }

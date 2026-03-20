@@ -205,6 +205,36 @@ fn stream_error_response(err: &StreamError) -> Response {
             )
             .into_response()
         }
+        StreamError::ImagesDisabled => {
+            info!(
+                reason = "kill_switch",
+                "images disabled via kill switch, request rejected"
+            );
+            Problem::new(
+                StatusCode::BAD_REQUEST,
+                "images_disabled",
+                "Image inputs are currently disabled",
+            )
+            .into_response()
+        }
+        StreamError::TooManyImages { count, max } => {
+            info!(count, max, "too many image attachments in request");
+            Problem::new(
+                StatusCode::BAD_REQUEST,
+                "too_many_images",
+                format!("Request includes {count} images, maximum is {max}"),
+            )
+            .into_response()
+        }
+        StreamError::UnsupportedMedia => {
+            info!("model does not support image input, request rejected");
+            Problem::new(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_media",
+                "The selected model does not support image input",
+            )
+            .into_response()
+        }
         StreamError::InvalidAttachment { code, message } => {
             info!(code = %code, message = %message, "invalid attachment in request");
             Problem::new(StatusCode::BAD_REQUEST, code, message).into_response()
