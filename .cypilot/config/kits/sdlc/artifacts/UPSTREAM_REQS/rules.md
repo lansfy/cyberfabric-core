@@ -90,7 +90,7 @@
 ### Traceability
 
 - [ ] When PRD is created for this module → PRD MUST trace back to UPSTREAM_REQS
-- [ ] All `upreq` IDs MUST be addressed in the PRD (covered or explicitly excluded with reasoning)
+- [ ] When PRD exists: all `upreq` IDs MUST be addressed in the PRD (covered or explicitly excluded with reasoning)
 - [ ] Requesting modules' docs MUST reference the `upreq` IDs they contributed
 
 ### Constraints
