@@ -1,3 +1,4 @@
+# Updated:  2026-03-27 by Constructor Tech
 # Cypilot artifacts registry (migrated from v2)
 
 [[ignore]]
@@ -189,6 +190,21 @@ extensions = [".rs"]
 [[systems.autodetect.codebase]]
 name = "Tests"
 path = "{system_root}/tests"
+extensions = [".rs"]
+
+[[systems.autodetect.codebase]]
+name = "Nested Modules"
+path = "{system_root}/{system}/src"
+extensions = [".rs"]
+
+[[systems.autodetect.codebase]]
+name = "Nested Tests"
+path = "{system_root}/{system}/tests"
+extensions = [".rs"]
+
+[[systems.autodetect.codebase]]
+name = "Nested SDK"
+path = "{system_root}/{system}-sdk/src"
 extensions = [".rs"]
 
 [[systems]]

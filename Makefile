@@ -121,8 +121,20 @@ clippy:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::perf
 
 # Validate cypilot artifacts (specs, code, templates)
+# TODO(https://github.com/cyberfabric/cyber-pilot/issues/136): replace shell coverage check
+#       with native `cypilot.py validate --min-coverage 100`
 cypilot-validate:
-	@python3 .cypilot/.core/skills/cypilot/scripts/cypilot.py validate && echo "OK. cypilot validation PASSED" || (echo "ERROR: cypilot validation FAILED"; exit 1)
+	@output=$$(python3 .cypilot/.core/skills/cypilot/scripts/cypilot.py validate 2>&1); rc=$$?; \
+	echo "$$output"; \
+	if [ $$rc -ne 0 ]; then echo "ERROR: cypilot validation FAILED"; exit 1; fi; \
+	cov=$$(echo "$$output" | grep "Code coverage:" | sed 's/.*Code coverage: *//'); \
+	if [ -n "$$cov" ]; then \
+		covered=$${cov%%/*}; total=$${cov##*/}; \
+		if [ "$$covered" != "$$total" ]; then \
+			echo "ERROR: cypilot code coverage not 100%: $$cov ($$((total - covered)) marker(s) missing in code)"; exit 1; \
+		fi; \
+	fi; \
+	echo "OK. cypilot validation PASSED"
 
 # Run markdown checks with 'lychee'
 lychee:
