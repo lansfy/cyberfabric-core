@@ -17,6 +17,12 @@ use crate::ConfigProvider;
 use crate::telemetry::OpenTelemetryConfig;
 use url::Url;
 
+/// Normalize a path to use forward slashes (for cross-platform YAML/DSN compatibility).
+fn normalize_path(path: &Path) -> String {
+    let resolved = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    resolved.to_string_lossy().replace('\\', "/")
+}
+
 /// Error type for vendor configuration access.
 #[derive(thiserror::Error, Debug)]
 pub enum VendorConfigError {
@@ -563,7 +569,7 @@ fn resolve_sqlite_dsn(
                 module_dir.join(file_path)
             };
 
-            let normalized_path = resolved_path.to_string_lossy().replace('\\', "/");
+            let normalized_path = normalize_path(&resolved_path);
             // For Windows absolute paths (C:/...), use sqlite:path format
             // For Unix absolute paths (/...), use sqlite://path format
             if normalized_path.len() > 1 && normalized_path.chars().nth(1) == Some(':') {
@@ -590,7 +596,7 @@ fn resolve_sqlite_dsn(
             })?;
         }
         let db_path = module_dir.join(format!("{module_name}.sqlite"));
-        let normalized_path = db_path.to_string_lossy().replace('\\', "/");
+        let normalized_path = normalize_path(&db_path);
         // For Windows absolute paths (C:/...), use sqlite:path format
         // For Unix absolute paths (/...), use sqlite://path format
         if normalized_path.len() > 1 && normalized_path.chars().nth(1) == Some(':') {
@@ -691,7 +697,7 @@ fn build_sqlite_dsn_with_dbname_override(
         })?;
     }
     let db_path = module_dir.join(dbname);
-    let normalized_path = db_path.to_string_lossy().replace('\\', "/");
+    let normalized_path = normalize_path(&db_path);
 
     // Build the new DSN with correct format for the platform
     let dsn_base = if normalized_path.len() > 1 && normalized_path.chars().nth(1) == Some(':') {
@@ -745,7 +751,7 @@ fn build_sqlite_dsn(
         } else {
             home_dir.join(path)
         };
-        let normalized_path = absolute_path.to_string_lossy().replace('\\', "/");
+        let normalized_path = normalize_path(&absolute_path);
         // For Windows absolute paths (C:/...), use sqlite:path format
         // For Unix absolute paths (/...), use sqlite://path format
         if normalized_path.len() > 1 && normalized_path.chars().nth(1) == Some(':') {
@@ -768,7 +774,7 @@ fn build_sqlite_dsn(
             })?;
         }
         let db_path = module_dir.join(file);
-        let normalized_path = db_path.to_string_lossy().replace('\\', "/");
+        let normalized_path = normalize_path(&db_path);
         // For Windows absolute paths (C:/...), use sqlite:path format
         // For Unix absolute paths (/...), use sqlite://path format
         if normalized_path.len() > 1 && normalized_path.chars().nth(1) == Some(':') {
@@ -790,7 +796,7 @@ fn build_sqlite_dsn(
         })?;
     }
     let db_path = module_dir.join(format!("{module_name}.sqlite"));
-    let normalized_path = db_path.to_string_lossy().replace('\\', "/");
+    let normalized_path = normalize_path(&db_path);
     // For Windows absolute paths (C:/...), use sqlite:path format
     // For Unix absolute paths (/...), use sqlite://path format
     if normalized_path.len() > 1 && normalized_path.chars().nth(1) == Some(':') {
@@ -1491,7 +1497,7 @@ setting2: 42
         .unwrap();
 
         // Convert Windows paths to forward slashes for YAML compatibility
-        let modules_dir_str = modules_dir.to_string_lossy().replace('\\', "/");
+        let modules_dir_str = normalize_path(&modules_dir);
         let yaml = format!(
             r#"
 server:
@@ -3081,7 +3087,7 @@ server:
   home_dir: "~/.test_dup_modfile"
 modules_dir: "{}"
 "#,
-            modules_dir.display()
+            normalize_path(&modules_dir)
         );
         let cfg_path = tmp.path().join("cfg.yaml");
         fs::write(&cfg_path, cfg_yaml).unwrap();
